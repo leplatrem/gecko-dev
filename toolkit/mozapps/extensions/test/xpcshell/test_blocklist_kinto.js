@@ -14,6 +14,12 @@ const KEY_APPDIR             = "XCurProcD";
 const KEY_PROFILEDIR         = "ProfD";
 const TEST_APP_ID            = "xpcshell@tests.mozilla.org";
 
+const gAppDir = FileUtils.getFile(KEY_APPDIR, []);
+const gProfDir = FileUtils.getFile(KEY_PROFILEDIR, []);
+const OLD = do_get_file("data/test_blocklist_kinto/old.json");
+const NEW = do_get_file("data/test_blocklist_kinto/new.json");
+const OLD_TSTAMP = 1296046918000;
+const NEW_TSTAMP = 1396046918000;
 
 const SAMPLE_ADDON_RECORD = {
   "prefs": [],
@@ -230,24 +236,28 @@ add_task(function* test_is_loaded_synchronously() {
 
 
 add_task(function* test_relies_on_handle_json_methods() {
+  copyToApp(OLD, "addons");
   const blocklist = Blocklist();
   const sample = {viaJson: true};
 
-  // XXX: sinon.stub ?
-  const savedAddonMethod = blocklist._handleAddonItemJSON;
-  const savedPluginMethod = blocklist._handlePluginItemJSON;
+  // mocking the handlers
+  let old_handleAddonItemJSON = blocklist._handleAddonItemJSON;
+  let old_handlePluginItemJSON = blocklist._handlePluginItemJSON;
   blocklist._handleAddonItemJSON = () => sample;
   blocklist._handlePluginItemJSON = () => sample;
 
   Services.prefs.setBoolPref(PREF_BLOCKLIST_VIA_AMO, false);
   blocklist.observe(null, "nsPref:changed", PREF_BLOCKLIST_VIA_AMO);
 
-  equal(blocklist._addonEntries[0], sample);
-  equal(blocklist._pluginEntries[0], sample);
-
-  // Restore mocks.
-  blocklist._handleAddonItemJSON = savedAddonMethod;
-  blocklist._handlePluginItemJSON = savedPluginMethod;
+  try {
+    blocklist._loadBlocklist();
+    equal(blocklist._addonEntries[0], sample);
+    equal(blocklist._pluginEntries[0], sample);
+  }
+  finally {
+    blocklist._handleAddonItemJSON = old_handleAddonItemJSON;
+    blocklist._handlePluginItemJSON = old_handlePluginItemJSON;
+  }
 });
 
 
@@ -366,9 +376,62 @@ add_test(function test_blocklist_is_reloaded_when_message_is_received() {
 });
 
 
-// add_test(function* test_read_json_from_app_or_profile() {
-//   // addon in app  / plugins in app
-//   // addon in prof / plugins in app
-//   // addon in app  / plugins in prof
-//   // addon in prof / plugins in prof
+// name can be addons or plugins
+function clearBlocklists(name) {
+  let filename = "blocklist-" + name + ".json";
+  let blocklist = FileUtils.getFile(KEY_APPDIR, [filename]);
+  if (blocklist.exists())
+    blocklist.remove(true);
+
+  blocklist = FileUtils.getFile(KEY_PROFILEDIR, [filename]);
+  if (blocklist.exists())
+    blocklist.remove(true);
+}
+
+function reloadBlocklist() {
+  Services.prefs.setBoolPref(PREF_BLOCKLIST_ENABLED, false);
+  Services.prefs.setBoolPref(PREF_BLOCKLIST_ENABLED, true);
+}
+
+function copyToApp(file, name) {
+  let filename = "blocklist-" + name + ".json";
+  file = file.clone();
+  file.copyTo(gAppDir, filename);
+}
+
+
+function copyToProfile(file, tstamp, name) {
+  let filename = "blocklist-" + name + ".json";
+  file = file.clone();
+  file.copyTo(gProfDir, filename);
+  file = gProfDir.clone();
+  file.append(filename);
+  file.lastModifiedTime = tstamp;
+}
+
+
+
+add_task(function* test_read_json_from_app_or_profile() {
+  const blocklist = Blocklist();
+  copyToProfile(OLD, OLD_TSTAMP, "addons");
+  blocklist._loadBlocklist();
+  do_check_eq(blocklist._addonEntries.length, 416);
+
+  // reading from profile
+  clearBlocklists("addons");
+  copyToProfile(NEW, NEW_TSTAMP, "addons");
+  blocklist._loadBlocklist();
+  // we should have one more
+  do_check_eq(blocklist._addonEntries.length, 417);
+
+  // reading from profile
+  clearBlocklists("addons");
+  copyToApp(OLD, "addons");
+  blocklist._loadBlocklist();
+  do_check_eq(blocklist._addonEntries.length, 416);
+});
+
+
+// add_task(function* test_invalid_json() {
+//
 // });
