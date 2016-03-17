@@ -700,6 +700,7 @@ Blocklist.prototype = {
    */
   _loadBlocklist: function() {
     this._addonEntries = [];
+    this._gfxEntries = [];
     this._pluginEntries = [];
     var profFile = FileUtils.getFile(KEY_PROFILEDIR, [FILE_BLOCKLIST]);
     if (profFile.exists()) {
@@ -836,7 +837,7 @@ Blocklist.prototype = {
   },
 
   _isBlocklistLoaded: function() {
-    return this._addonEntries != null && this._pluginEntries != null;
+    return this._addonEntries != null && this._gfxEntries != null && this._pluginEntries != null;
   },
 
   _isBlocklistPreloaded: function() {
@@ -846,6 +847,7 @@ Blocklist.prototype = {
   /* Used for testing */
   _clear: function() {
     this._addonEntries = null;
+    this._gfxEntries = null;
     this._pluginEntries = null;
     this._preloadedBlocklistContent = null;
   },
@@ -911,12 +913,12 @@ Blocklist.prototype = {
         case "emItems":
           // Special case for b2g, since we don't use the addon manager.
           if (AppConstants.MOZ_B2G) {
-            let extensions = this._processItemNodes(element.childNodes, "em",
+            let extensions = this._processItemNodes(element.childNodes, "emItem",
                                                     this._handleEmItemNode);
             DOMApplicationRegistry.blockExtensions(extensions);
             return;
           }
-          this._addonEntries = this._processItemNodes(element.childNodes, "em",
+          this._addonEntries = this._processItemNodes(element.childNodes, "emItem",
                                                       this._handleEmItemNode);
           break;
         case "pluginItems":
@@ -924,24 +926,28 @@ Blocklist.prototype = {
           if (AppConstants.MOZ_B2G) {
             return;
           }
-          this._pluginEntries = this._processItemNodes(element.childNodes, "plugin",
+          this._pluginEntries = this._processItemNodes(element.childNodes, "pluginItem",
                                                        this._handlePluginItemNode);
           break;
         case "certItems":
           if (populateCertBlocklist) {
-            this._processItemNodes(element.childNodes, "cert",
+            this._processItemNodes(element.childNodes, "certItem",
                                    this._handleCertItemNode.bind(this));
           }
           break;
+        case "gfxItems":
+          // Parse as simple list of objects.
+          this._gfxEntries = this._processItemNodes(element.childNodes, "gfxBlacklistEntry",
+                                                    this._handleGfxBlacklistNode);
+          break;
         default:
-          Services.obs.notifyObservers(element,
-                                       "blocklist-data-" + element.localName,
-                                       null);
+          LOG("Blocklist::_loadBlocklistFromString: ignored entries " + element.localName);
         }
       }
       if (populateCertBlocklist) {
         gCertBlocklistService.saveEntries();
       }
+      this._notifyObserversBlocklistGFX();
     }
     catch (e) {
       LOG("Blocklist::_loadBlocklistFromFile: Error constructing blocklist " + e);
@@ -949,9 +955,8 @@ Blocklist.prototype = {
     }
   },
 
-  _processItemNodes: function(itemNodes, prefix, handler) {
+  _processItemNodes: function(itemNodes, itemName, handler) {
     var result = [];
-    var itemName = prefix + "Item";
     for (var i = 0; i < itemNodes.length; ++i) {
       var blocklistElement = itemNodes.item(i);
       if (!(blocklistElement instanceof Ci.nsIDOMElement) ||
@@ -1085,6 +1090,54 @@ Blocklist.prototype = {
 
     blockEntry.blockID = blocklistElement.getAttribute("blockID");
 
+    result.push(blockEntry);
+  },
+
+  // <gfxBlacklistEntry>
+  //   <os>WINNT 6.0</os>
+  //   <osversion>14</osversion> currently only used for Android
+  //   <vendor>0x8086</vendor>
+  //   <devices>
+  //     <device>0x2582</device>
+  //     <device>0x2782</device>
+  //   </devices>
+  //   <feature> DIRECT3D_10_LAYERS </feature>
+  //   <featureStatus> BLOCKED_DRIVER_VERSION </featureStatus>
+  //   <driverVersion> 8.52.322.2202 </driverVersion>
+  //   <driverVersionMax> 8.52.322.2202 </driverVersionMax>
+  //   <driverVersionComparator> LESS_THAN_OR_EQUAL </driverVersionComparator>
+  //   <model>foo</model>
+  //   <product>foo</product>
+  //   <manufacturer>foo</manufacturer>
+  //   <hardware>foo</hardware>
+  // </gfxBlacklistEntry>
+  _handleGfxBlacklistNode: function (blocklistElement, result) {
+    const blockEntry = {};
+
+    const ATTRIBUTES = ["os", "osversion", "devices", "vendor", "feature", "featureStatus",
+                        "driverVersion", "driverVersionMax", "driverVersionComparator",
+                        "model", "product", "manufacturer", "hardware"];
+    for (var i = 0; i < blocklistElement.childNodes.length; ++i) {
+      var matchElement = blocklistElement.childNodes.item(i);
+      if (!(matchElement instanceof Ci.nsIDOMElement))
+        continue;
+      if (ATTRIBUTES.indexOf(matchElement.localName) < 0)
+        continue;
+
+      let value;
+      if (matchElement.localName == "devices") {
+        value = [];
+        for (var j = 0; j < matchElement.childNodes.length; j++) {
+          var deviceElement = matchElement.childNodes.item(j);
+          value.push(deviceElement.textContent.replace(/^\s+|\s+$/g, ""));
+        }
+      }
+      else {
+        // Every node except device is text.
+        value = matchElement.textContent.replace(/^\s+|\s+$/g, "");
+      }
+      blockEntry[matchElement.localName] = value;
+    }
     result.push(blockEntry);
   },
 
@@ -1228,6 +1281,22 @@ Blocklist.prototype = {
     }
 
     return blockEntry.infoURL;
+  },
+
+  _notifyObserversBlocklistGFX: function () {
+    // Notify `GfxInfoBase`, by passing a string serialization.
+    // This way we avoid spreading XML structure logics there.
+    const payload = this._gfxEntries.map((r) => {
+      return Object.keys(r).map((key) => {
+        let value = r[key];
+        if (key === "devices")
+            value = value.join(",");
+        if (key === "versionRange")
+            value = `${value.minVersion},${value.maxVersion}`;
+        return `${key}:${value}`;
+      }).join("\t");
+    }).join("\n");
+    Services.obs.notifyObservers(null, "blocklist-data-gfxItems", payload);
   },
 
   _notifyObserversBlocklistUpdated: function() {
