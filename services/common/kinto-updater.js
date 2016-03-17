@@ -10,12 +10,18 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.importGlobalProperties(['fetch']);
 
-const PREF_KINTO_CHANGES_PATH = "services.kinto.changes.path";
-const PREF_KINTO_BASE = "services.kinto.base";
-const PREF_KINTO_LAST_UPDATE = "services.kinto.last_update_seconds";
+const PREF_KINTO_CHANGES_PATH       = "services.kinto.changes.path";
+const PREF_KINTO_BASE               = "services.kinto.base";
+const PREF_KINTO_BUCKET             = "services.kinto.bucket";
+const PREF_KINTO_LAST_UPDATE        = "services.kinto.last_update_seconds";
 const PREF_KINTO_CLOCK_SKEW_SECONDS = "services.kinto.clock_skew_seconds";
+const PREF_KINTO_ONECRL_COLLECTION  = "services.kinto.onecrl.collection";
+const PREF_KINTO_ADDONS_COLLECTION  = "services.kinto.addons.collection";
+const PREF_KINTO_PLUGINS_COLLECTION = "services.kinto.plugins.collection";
+const PREF_KINTO_GFX_COLLECTION     = "services.kinto.gfx.collection";
 
-const kintoClients = {
+
+const gKintoClients = {
 };
 
 // This is called by the ping mechanism.
@@ -47,7 +53,7 @@ this.checkVersions = function() {
     let firstError;
     for (let collectionInfo of versionInfo.data) {
       let collection = collectionInfo.collection;
-      let kintoClient = kintoClients[collection];
+      let kintoClient = gKintoClients[collection];
       if (kintoClient && kintoClient.maybeSync) {
         let lastModified = 0;
         if (collectionInfo.last_modified) {
@@ -71,10 +77,12 @@ this.checkVersions = function() {
 
 // Add a kintoClient for testing purposes. Do not use for any other purpose
 this.addTestKintoClient = function(name, kintoClient) {
-  kintoClients[name] = kintoClient;
+  gKintoClients[name] = kintoClient;
 };
 
 // Add the various things that we know want updates
-kintoClients.certificates =
-  Cu.import("resource://services-common/KintoCertificateBlocklist.js", {})
-  .OneCRLClient;
+const KintoBlocklist = Cu.import("resource://services-common/KintoBlocklist.js", {});
+gKintoClients[Services.prefs.getCharPref(PREF_KINTO_ONECRL_COLLECTION)]  = KintoBlocklist.OneCRLClient;
+gKintoClients[Services.prefs.getCharPref(PREF_KINTO_ADDONS_COLLECTION)]  = KintoBlocklist.AddonClient;
+gKintoClients[Services.prefs.getCharPref(PREF_KINTO_GFX_COLLECTION)]     = KintoBlocklist.GfxClient;
+gKintoClients[Services.prefs.getCharPref(PREF_KINTO_PLUGINS_COLLECTION)] = KintoBlocklist.PluginClient;
