@@ -16,6 +16,7 @@ const PREF_KINTO_BUCKET = "services.kinto.bucket";
 const PREF_KINTO_LAST_UPDATE = "services.kinto.last_update_seconds";
 const PREF_KINTO_LAST_TIMESTAMP = "services.kinto.last_timestamp";
 const PREF_KINTO_CLOCK_SKEW_SECONDS = "services.kinto.clock_skew_seconds";
+const PREF_KINTO_ONECRL_COLLECTION = "services.kinto.onecrl.collection";
 
 const kintoClients = {
 };
@@ -97,6 +98,5 @@ this.addTestKintoClient = function(name, kintoClient) {
 };
 
 // Add the various things that we know want updates
-kintoClients.certificates =
-  Cu.import("resource://services-common/KintoCertificateBlocklist.js", {})
-  .OneCRLClient;
+const KintoBlocklist = Cu.import("resource://services-common/KintoCertificateBlocklist.js", {});
+kintoClients[Services.prefs.getCharPref(PREF_KINTO_ONECRL_COLLECTION)]  = KintoBlocklist.OneCRLClient;
