@@ -53,8 +53,9 @@ add_task(function* test_check_maybeSync(){
 
   let startTime = Date.now();
 
+  let updater = Cu.import("resource://services-common/kinto-updater.js");
+
   let syncPromise = new Promise(function(resolve, reject) {
-    let updater = Cu.import("resource://services-common/kinto-updater.js");
     // add a test kinto client that will respond to lastModified information
     // for a collection called 'test-collection'
     updater.addTestKintoClient("test-collection", {
@@ -102,7 +103,19 @@ function getSampleResponse(req, port) {
         "Content-Type: application/json; charset=UTF-8"
       ],
       "status": {status: 200, statusText: "OK"},
-      "responseBody": JSON.stringify({"data":[{"host":"localhost","last_modified":1000,"bucket":"blocklists","id":"330a0c5f-fadf-ff0b-40c8-4eb0d924ff6a","collection":"test-collection"}]})
+      "responseBody": JSON.stringify({"data":[{
+        "host":"localhost",
+        "last_modified":1100,
+        "bucket":"blocklists:aurora",
+        "id":"330a0c5f-fadf-ff0b-40c8-4eb0d924ff6a",
+        "collection":"test-collection"
+      }, {
+        "host":"localhost",
+        "last_modified":1000,
+        "bucket":"blocklists",
+        "id":"254cbb9e-6888-4d9f-8e60-58b74faa8778",
+        "collection":"test-collection"
+      }]})
     }
   };
   return responses[`${req.method}:${req.path}?${req.queryString}`] ||

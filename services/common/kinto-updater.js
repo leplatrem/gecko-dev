@@ -12,6 +12,7 @@ Cu.importGlobalProperties(['fetch']);
 
 const PREF_KINTO_CHANGES_PATH = "services.kinto.changes.path";
 const PREF_KINTO_BASE = "services.kinto.base";
+const PREF_KINTO_BUCKET = "services.kinto.bucket";
 const PREF_KINTO_LAST_UPDATE = "services.kinto.last_update_seconds";
 const PREF_KINTO_CLOCK_SKEW_SECONDS = "services.kinto.clock_skew_seconds";
 
@@ -33,6 +34,7 @@ this.checkVersions = function() {
     // Right now, we only use the collection name and the last modified info
     let kintoBase = Services.prefs.getCharPref(PREF_KINTO_BASE);
     let changesEndpoint = kintoBase + Services.prefs.getCharPref(PREF_KINTO_CHANGES_PATH);
+    let blocklistsBucket = Services.prefs.getCharPref(PREF_KINTO_BUCKET);
 
     let response = yield fetch(changesEndpoint);
 
@@ -46,6 +48,10 @@ this.checkVersions = function() {
 
     let firstError;
     for (let collectionInfo of versionInfo.data) {
+      // Skip changes that don't concern configured blocklist bucket.
+      if (collectionInfo.bucket != blocklistsBucket)
+        continue;
+
       let collection = collectionInfo.collection;
       let kintoClient = kintoClients[collection];
       if (kintoClient && kintoClient.maybeSync) {
