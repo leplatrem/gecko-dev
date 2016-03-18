@@ -38,6 +38,10 @@ const TOOLKIT_ID                      = "toolkit@mozilla.org";
 const KEY_PROFILEDIR                  = "ProfD";
 const KEY_APPDIR                      = "XCurProcD";
 const FILE_BLOCKLIST                  = "blocklist.xml";
+const FILE_BLOCKLIST_ADDONS_JSON      = "blocklist-addons.json";
+const FILE_BLOCKLIST_GFX_JSON         = "blocklist-gfx.json";
+const FILE_BLOCKLIST_PLUGINS_JSON     = "blocklist-plugins.json";
+
 const PREF_BLOCKLIST_LASTUPDATETIME   = "app.update.lastUpdateTime.blocklist-background-update-timer";
 const PREF_BLOCKLIST_URL              = "extensions.blocklist.url";
 const PREF_BLOCKLIST_ITEM_URL         = "extensions.blocklist.itemURL";
@@ -48,6 +52,7 @@ const PREF_BLOCKLIST_PINGCOUNTTOTAL   = "extensions.blocklist.pingCountTotal";
 const PREF_BLOCKLIST_PINGCOUNTVERSION = "extensions.blocklist.pingCountVersion";
 const PREF_BLOCKLIST_SUPPRESSUI       = "extensions.blocklist.suppressUI";
 const PREF_ONECRL_VIA_AMO             = "security.onecrl.via.amo";
+const PREF_BLOCKLIST_VIA_AMO          = "security.blocklist.via.amo";
 const PREF_KINTO_UPDATE_ENABLED       = "services.kinto.update_enabled";
 const PREF_PLUGINS_NOTIFYUSER         = "plugins.update.notifyUser";
 const PREF_GENERAL_USERAGENT_LOCALE   = "general.useragent.locale";
@@ -70,6 +75,7 @@ const EXTENSION_BLOCK_FILTERS = ["id", "name", "creator", "homepageURL", "update
 
 var gLoggingEnabled = null;
 var gBlocklistEnabled = true;
+var gBlocklistFromXML = true;
 var gBlocklistLevel = DEFAULT_LEVEL;
 
 XPCOMUtils.defineLazyServiceGetter(this, "gConsole",
@@ -301,12 +307,14 @@ function Blocklist() {
   Services.obs.addObserver(this, "sessionstore-windows-restored", false);
   gLoggingEnabled = getPref("getBoolPref", PREF_EM_LOGGING_ENABLED, false);
   gBlocklistEnabled = getPref("getBoolPref", PREF_BLOCKLIST_ENABLED, true);
+  gBlocklistFromXML = getPref("getBoolPref", PREF_BLOCKLIST_VIA_AMO, true);
   gBlocklistLevel = Math.min(getPref("getIntPref", PREF_BLOCKLIST_LEVEL, DEFAULT_LEVEL),
                                      MAX_BLOCK_LEVEL);
   gPref.addObserver("extensions.blocklist.", this, false);
   gPref.addObserver(PREF_EM_LOGGING_ENABLED, this, false);
   this.wrappedJSObject = this;
   // requests from child processes come in here, see receiveMessage.
+  Services.ppmm.addMessageListener("Blocklist:reload-from-disk", this);
   Services.ppmm.addMessageListener("Blocklist:getPluginBlocklistState", this);
   Services.ppmm.addMessageListener("Blocklist:content-blocklist-updated", this);
 }
@@ -329,9 +337,11 @@ Blocklist.prototype = {
    */
   _addonEntries: null,
   _pluginEntries: null,
+  _preloadedBlocklistContent: {},
 
   shutdown: function() {
     Services.obs.removeObserver(this, "xpcom-shutdown");
+    Services.ppmm.removeMessageListener("Blocklist:reload-from-disk", this);
     Services.ppmm.removeMessageListener("Blocklist:getPluginBlocklistState", this);
     Services.ppmm.removeMessageListener("Blocklist:content-blocklist-updated", this);
     gPref.removeObserver("extensions.blocklist.", this);
@@ -353,6 +363,11 @@ Blocklist.prototype = {
           this._loadBlocklist();
           this._blocklistUpdated(null, null);
           break;
+        case PREF_BLOCKLIST_VIA_AMO:
+          gBlocklistFromXML = getPref("getBoolPref", PREF_BLOCKLIST_VIA_AMO, true);
+          this._loadBlocklist();
+          this._blocklistUpdated(null, null);
+          break;
         case PREF_BLOCKLIST_LEVEL:
           gBlocklistLevel = Math.min(getPref("getIntPref", PREF_BLOCKLIST_LEVEL, DEFAULT_LEVEL),
                                      MAX_BLOCK_LEVEL);
@@ -370,6 +385,17 @@ Blocklist.prototype = {
   // Message manager message handlers
   receiveMessage: function(aMsg) {
     switch (aMsg.name) {
+      case "Blocklist:reload-from-disk":
+        const oldAddonEntries = this._addonEntries;
+        const oldPluginEntries = this._pluginEntries;
+        this._addonEntries = [];
+        this._gfxEntries = [];
+        this._pluginEntries = [];
+        // Read JSON files from disk.
+        this._loadBlocklist();
+        // Update status of addons/plugins.
+        this._blocklistUpdated(oldAddonEntries, oldPluginEntries);
+        break;
       case "Blocklist:getPluginBlocklistState":
         return this.getPluginBlocklistState(aMsg.data.addonData,
                                             aMsg.data.appVersion,
@@ -516,6 +542,9 @@ Blocklist.prototype = {
     if (!gBlocklistEnabled)
       return;
 
+    if (!gBlocklistFromXML)
+      return;
+
     try {
       var dsURI = gPref.getCharPref(PREF_BLOCKLIST_URL);
     }
@@ -627,17 +656,6 @@ Blocklist.prototype = {
     // make sure we have loaded it.
     if (!this._isBlocklistLoaded())
       this._loadBlocklist();
-
-    // If kinto update is enabled, do the kinto update
-    if (gPref.getBoolPref(PREF_KINTO_UPDATE_ENABLED)) {
-      let KintoUpdater =
-        Components.utils.import("resource://services-common/kinto-updater.js",
-                                {});
-      KintoUpdater.checkVersions().catch(() => {
-        // Before we enable this in release, we want to collect telemetry on
-        // failed kinto updates - see bug 1254099
-      });
-    }
   },
 
   onXMLLoad: Task.async(function*(aEvent) {
@@ -659,9 +677,13 @@ Blocklist.prototype = {
     var oldAddonEntries = this._addonEntries;
     var oldPluginEntries = this._pluginEntries;
     this._addonEntries = [];
+    this._certEntries = [];
+    this._gfxEntries = [];
     this._pluginEntries = [];
 
-    this._loadBlocklistFromString(request.responseText);
+    this._loadBlocklistFromXMLString(request.responseText);
+    this._revokeCertificates();
+    this._notifyObserversBlocklistGFX();
     this._blocklistUpdated(oldAddonEntries, oldPluginEntries);
 
     try {
@@ -700,19 +722,201 @@ Blocklist.prototype = {
    */
   _loadBlocklist: function() {
     this._addonEntries = [];
+    this._certEntries = [];
     this._pluginEntries = [];
-    var profFile = FileUtils.getFile(KEY_PROFILEDIR, [FILE_BLOCKLIST]);
-    if (profFile.exists()) {
-      this._loadBlocklistFromFile(profFile);
+    this._gfxEntries = [];
+
+    if (gBlocklistFromXML) {
+      var profFile = FileUtils.getFile(KEY_PROFILEDIR, [FILE_BLOCKLIST]);
+      if (profFile.exists()) {
+        const text = this._loadBlocklistFromFile(profFile);
+        if (text) {
+          this._loadBlocklistFromXMLString(text);
+          this._revokeCertificates();
+          this._notifyObserversBlocklistGFX();
+        }
+        return;
+      }
+      var appFile = FileUtils.getFile(KEY_APPDIR, [FILE_BLOCKLIST]);
+      if (appFile.exists()) {
+        const text = this._loadBlocklistFromFile(appFile);
+        if (text) {
+          this._loadBlocklistFromXMLString(text);
+          this._revokeCertificates();
+          this._notifyObserversBlocklistGFX();
+        }
+        return;
+      }
+      LOG("Blocklist::_loadBlocklist: no XML File found");
       return;
     }
-    var appFile = FileUtils.getFile(KEY_APPDIR, [FILE_BLOCKLIST]);
-    if (appFile.exists()) {
-      this._loadBlocklistFromFile(appFile);
-      return;
+
+    // XXX: we don't handle the case when PREF_ONECRL_VIA_AMO is true
+    // and PREF_BLOCKLIST_VIA_AMO is false.
+    // -> One PREF only ?
+
+    // Rely on Kinto for blocklists synchronization.
+    // Load from two distinct JSON files for addons and plugins.
+    const blocklists = {
+      addon:  {func: this._handleAddonItemJSON,  filename: FILE_BLOCKLIST_ADDONS_JSON},
+      gfx:    {func: this._handleGfxItemJSON,    filename: FILE_BLOCKLIST_GFX_JSON},
+      plugin: {func: this._handlePluginItemJSON, filename: FILE_BLOCKLIST_PLUGINS_JSON}
+    };
+
+    for(let blocklist of Object.keys(blocklists)) {
+      const {func, filename} = blocklists[blocklist];
+      var jsonFile = FileUtils.getFile(KEY_PROFILEDIR, [filename]);
+      if (!jsonFile.exists()) {
+        var jsonAppFile = FileUtils.getFile(KEY_APPDIR, [filename]);
+        if (!jsonAppFile.exists()) {
+          LOG(`Blocklist::_loadBlocklist: no ${filename} file found`);
+          return;
+        }
+        jsonFile = jsonAppFile;
+      }
+
+      let text = this._loadBlocklistFromFile(jsonFile);
+      if (!text) {
+        LOG(`Blocklist::_loadBlocklist: no content found in ${filename}`);
+        return;
+      }
+
+      let parsedEntries;
+      try {
+        parsedEntries = JSON.parse(text);
+      }
+      catch (e) {
+        LOG("Blocklist::_loadBlocklist: Could not parse JSON " + e);
+        continue;
+      }
+
+      // Go through every entries from JSON, and instantiate addon and plugins
+      // entries.
+      for(let entry of parsedEntries.data) {
+        const blockEntry = func(entry);
+        if (blockEntry)
+          this[`_${blocklist}Entries`].push(blockEntry);
+      }
     }
-    LOG("Blocklist::_loadBlocklist: no XML File found");
+
+    this._notifyObserversBlocklistGFX();
   },
+
+  _loadBlocklistFromFile: function(file) {
+    if (!gBlocklistEnabled) {
+      LOG("Blocklist::_loadBlocklistFromFile: blocklist is disabled");
+      return null;
+    }
+
+    let telemetry = Services.telemetry;
+
+    if (this._isBlocklistPreloaded()) {
+      telemetry.getHistogramById("BLOCKLIST_SYNC_FILE_LOAD").add(false);
+      const text = this._preloadedBlocklistContent[file.path];
+      delete this._preloadedBlocklistContent[file.path];
+      return text;
+    }
+
+    if (!file.exists()) {
+      LOG("Blocklist::_loadBlocklistFromFile: File does not exist " + file.path);
+      return null;
+    }
+
+    telemetry.getHistogramById("BLOCKLIST_SYNC_FILE_LOAD").add(true);
+
+    let text = "";
+    let fstream = null;
+    let cstream = null;
+
+    try {
+      fstream = Components.classes["@mozilla.org/network/file-input-stream;1"]
+                          .createInstance(Components.interfaces.nsIFileInputStream);
+      cstream = Components.classes["@mozilla.org/intl/converter-input-stream;1"]
+                          .createInstance(Components.interfaces.nsIConverterInputStream);
+
+      fstream.init(file, FileUtils.MODE_RDONLY, FileUtils.PERMS_FILE, 0);
+      cstream.init(fstream, "UTF-8", 0, 0);
+
+      let str = {};
+      let read = 0;
+
+      do {
+        read = cstream.readString(0xffffffff, str); // read as much as we can and put it in str.value
+        text += str.value;
+      } while (read != 0);
+    } catch (e) {
+      LOG("Blocklist::_loadBlocklistFromFile: Failed to load file " + e);
+    } finally {
+      if (cstream)
+        cstream.close();
+      if (fstream)
+        fstream.close();
+    }
+
+    return text;
+  },
+
+  _isBlocklistLoaded: function() {
+    return this._addonEntries != null && this._certEntries != null && this._gfxEntries != null && this._pluginEntries != null;
+  },
+
+  _isBlocklistPreloaded: function() {
+    return Object.keys(this._preloadedBlocklistContent).length > 0;
+  },
+
+  /* Used for testing */
+  _clear: function() {
+    this._addonEntries = null;
+    this._certEntries = null;
+    this._gfxEntries = null;
+    this._pluginEntries = null;
+    this._preloadedBlocklistContent = {};
+  },
+
+  _preloadBlocklist: Task.async(function*() {
+    if (this._isBlocklistLoaded()) {
+      // The file has been already loaded.
+      return;
+    }
+
+    if (!gBlocklistEnabled) {
+      LOG("Blocklist::_preloadBlocklistFile: blocklist is disabled");
+      return;
+    }
+
+    const paths = gBlocklistFromXML ? [FILE_BLOCKLIST]
+                                    : ['blocklist-addons.json',
+                                       'blocklist-gfx.json',
+                                       'blocklist-plugins.json'];
+    for (let path of paths) {
+      let profPath = OS.Path.join(OS.Constants.Path.profileDir, path);
+      try {
+        yield this._preloadBlocklistFile(profPath);
+        continue;
+      } catch (e) {
+        LOG("Blocklist::_preloadBlocklist: Failed to load file " + e)
+      }
+
+      var appFile = FileUtils.getFile(KEY_APPDIR, [path]);
+      try{
+        yield this._preloadBlocklistFile(appFile.path);
+        continue;
+      } catch (e) {
+        LOG("Blocklist::_preloadBlocklist: Failed to load file " + e)
+      }
+
+      LOG("Blocklist::_preloadBlocklist: no file found");
+    }
+  }),
+
+  _preloadBlocklistFile: Task.async(function*(path){
+    let text = yield OS.File.read(path, { encoding: "utf-8" });
+
+    if (!this._isBlocklistLoaded()) {
+      // Store the content only if a sync load has not been performed in the meantime.
+      this._preloadedBlocklistContent[path] = text;
+    }
+  }),
 
   /**
 #    The blocklist XML file looks something like this:
@@ -779,129 +983,17 @@ Blocklist.prototype = {
 #      </certItems>
 #    </blocklist>
    */
-
-  _loadBlocklistFromFile: function(file) {
-    if (!gBlocklistEnabled) {
-      LOG("Blocklist::_loadBlocklistFromFile: blocklist is disabled");
-      return;
-    }
-
-    let telemetry = Services.telemetry;
-
-    if (this._isBlocklistPreloaded()) {
-      telemetry.getHistogramById("BLOCKLIST_SYNC_FILE_LOAD").add(false);
-      this._loadBlocklistFromString(this._preloadedBlocklistContent);
-      delete this._preloadedBlocklistContent;
-      return;
-    }
-
-    if (!file.exists()) {
-      LOG("Blocklist::_loadBlocklistFromFile: XML File does not exist " + file.path);
-      return;
-    }
-
-    telemetry.getHistogramById("BLOCKLIST_SYNC_FILE_LOAD").add(true);
-
-    let text = "";
-    let fstream = null;
-    let cstream = null;
-
-    try {
-      fstream = Components.classes["@mozilla.org/network/file-input-stream;1"]
-                          .createInstance(Components.interfaces.nsIFileInputStream);
-      cstream = Components.classes["@mozilla.org/intl/converter-input-stream;1"]
-                          .createInstance(Components.interfaces.nsIConverterInputStream);
-
-      fstream.init(file, FileUtils.MODE_RDONLY, FileUtils.PERMS_FILE, 0);
-      cstream.init(fstream, "UTF-8", 0, 0);
-
-      let str = {};
-      let read = 0;
-
-      do {
-        read = cstream.readString(0xffffffff, str); // read as much as we can and put it in str.value
-        text += str.value;
-      } while (read != 0);
-    } catch (e) {
-      LOG("Blocklist::_loadBlocklistFromFile: Failed to load XML file " + e);
-    } finally {
-      if (cstream)
-        cstream.close();
-      if (fstream)
-        fstream.close();
-    }
-
-    if (text)
-        this._loadBlocklistFromString(text);
-  },
-
-  _isBlocklistLoaded: function() {
-    return this._addonEntries != null && this._pluginEntries != null;
-  },
-
-  _isBlocklistPreloaded: function() {
-    return this._preloadedBlocklistContent != null;
-  },
-
-  /* Used for testing */
-  _clear: function() {
-    this._addonEntries = null;
-    this._pluginEntries = null;
-    this._preloadedBlocklistContent = null;
-  },
-
-  _preloadBlocklist: Task.async(function*() {
-    let profPath = OS.Path.join(OS.Constants.Path.profileDir, FILE_BLOCKLIST);
-    try {
-      yield this._preloadBlocklistFile(profPath);
-      return;
-    } catch (e) {
-      LOG("Blocklist::_preloadBlocklist: Failed to load XML file " + e)
-    }
-
-    var appFile = FileUtils.getFile(KEY_APPDIR, [FILE_BLOCKLIST]);
-    try{
-      yield this._preloadBlocklistFile(appFile.path);
-      return;
-    } catch (e) {
-      LOG("Blocklist::_preloadBlocklist: Failed to load XML file " + e)
-    }
-
-    LOG("Blocklist::_preloadBlocklist: no XML File found");
-  }),
-
-  _preloadBlocklistFile: Task.async(function*(path){
-    if (this._addonEntries) {
-      // The file has been already loaded.
-      return;
-    }
-
-    if (!gBlocklistEnabled) {
-      LOG("Blocklist::_preloadBlocklistFile: blocklist is disabled");
-      return;
-    }
-
-    let text = yield OS.File.read(path, { encoding: "utf-8" });
-
-    if (!this._addonEntries) {
-      // Store the content only if a sync load has not been performed in the meantime.
-      this._preloadedBlocklistContent = text;
-    }
-  }),
-
-  _loadBlocklistFromString : function(text) {
+  _loadBlocklistFromXMLString : function(text) {
     try {
       var parser = Cc["@mozilla.org/xmlextras/domparser;1"].
                    createInstance(Ci.nsIDOMParser);
       var doc = parser.parseFromString(text, "text/xml");
       if (doc.documentElement.namespaceURI != XMLURI_BLOCKLIST) {
-        LOG("Blocklist::_loadBlocklistFromFile: aborting due to incorrect " +
+        LOG("Blocklist::_loadBlocklistFromXMLString: aborting due to incorrect " +
             "XML Namespace.\r\nExpected: " + XMLURI_BLOCKLIST + "\r\n" +
             "Received: " + doc.documentElement.namespaceURI);
         return;
       }
-
-      var populateCertBlocklist = getPref("getBoolPref", PREF_ONECRL_VIA_AMO, true);
 
       var childNodes = doc.documentElement.childNodes;
       for (let element of childNodes) {
@@ -911,12 +1003,12 @@ Blocklist.prototype = {
         case "emItems":
           // Special case for b2g, since we don't use the addon manager.
           if (AppConstants.MOZ_B2G) {
-            let extensions = this._processItemNodes(element.childNodes, "em",
+            let extensions = this._processItemNodes(element.childNodes, "emItem",
                                                     this._handleEmItemNode);
             DOMApplicationRegistry.blockExtensions(extensions);
             return;
           }
-          this._addonEntries = this._processItemNodes(element.childNodes, "em",
+          this._addonEntries = this._processItemNodes(element.childNodes, "emItem",
                                                       this._handleEmItemNode);
           break;
         case "pluginItems":
@@ -924,34 +1016,33 @@ Blocklist.prototype = {
           if (AppConstants.MOZ_B2G) {
             return;
           }
-          this._pluginEntries = this._processItemNodes(element.childNodes, "plugin",
+          this._pluginEntries = this._processItemNodes(element.childNodes, "pluginItem",
                                                        this._handlePluginItemNode);
           break;
         case "certItems":
           if (populateCertBlocklist) {
-            this._processItemNodes(element.childNodes, "cert",
+            this._processItemNodes(element.childNodes, "certItem",
                                    this._handleCertItemNode.bind(this));
           }
           break;
+        case "gfxItems":
+          // Parse as simple list of objects.
+          this._gfxEntries = this._processItemNodes(element.childNodes, "gfxBlacklistEntry",
+                                                    this._handleGfxBlacklistNode);
+          break;
         default:
-          Services.obs.notifyObservers(element,
-                                       "blocklist-data-" + element.localName,
-                                       null);
+          LOG("Blocklist::_loadBlocklistFromXMLString: ignored entries " + element.localName);
         }
-      }
-      if (populateCertBlocklist) {
-        gCertBlocklistService.saveEntries();
       }
     }
     catch (e) {
-      LOG("Blocklist::_loadBlocklistFromFile: Error constructing blocklist " + e);
+      LOG("Blocklist::_loadBlocklistFromXMLString: Error constructing blocklist " + e);
       return;
     }
   },
 
-  _processItemNodes: function(itemNodes, prefix, handler) {
+  _processItemNodes: function(itemNodes, itemName, handler) {
     var result = [];
-    var itemName = prefix + "Item";
     for (var i = 0; i < itemNodes.length; ++i) {
       var blocklistElement = itemNodes.item(i);
       if (!(blocklistElement instanceof Ci.nsIDOMElement) ||
@@ -964,30 +1055,19 @@ Blocklist.prototype = {
   },
 
   _handleCertItemNode: function(blocklistElement, result) {
-    let issuer = blocklistElement.getAttribute("issuerName");
-    if (issuer) {
+    const blockEntry = {};
+
+    blocklist.issuerName = blocklistElement.getAttribute("pubKeyHash");
+    if (blocklist.issuerName) {
       for (let snElement of blocklistElement.children) {
-        try {
-          gCertBlocklistService.revokeCertByIssuerAndSerial(issuer, snElement.textContent);
-        } catch (e) {
-          // we want to keep trying other elements since missing all items
-          // is worse than missing one
-          LOG("Blocklist::_handleCertItemNode: Error adding revoked cert by Issuer and Serial" + e);
-        }
-      }
-      return;
-    }
-
-    let pubKeyHash = blocklistElement.getAttribute("pubKeyHash");
-    let subject = blocklistElement.getAttribute("subject");
-
-    if (pubKeyHash && subject) {
-      try {
-        gCertBlocklistService.revokeCertBySubjectAndPubKey(subject, pubKeyHash);
-      } catch (e) {
-        LOG("Blocklist::_handleCertItemNode: Error adding revoked cert by Subject and PubKey" + e);
+        blockList.serialNumber = snElement.textContent;
       }
     }
+    else {
+      blockEntry.pubKeyHash = blocklistElement.getAttribute("pubKeyHash");
+      blockEntry.subject = blocklistElement.getAttribute("subject");
+    }
+    result.push(blockEntry);
   },
 
   _handleEmItemNode: function(blocklistElement, result) {
@@ -1086,6 +1166,202 @@ Blocklist.prototype = {
     blockEntry.blockID = blocklistElement.getAttribute("blockID");
 
     result.push(blockEntry);
+  },
+
+  // <gfxBlacklistEntry>
+  //   <os>WINNT 6.0</os>
+  //   <osversion>14</osversion> currently only used for Android
+  //   <vendor>0x8086</vendor>
+  //   <devices>
+  //     <device>0x2582</device>
+  //     <device>0x2782</device>
+  //   </devices>
+  //   <feature> DIRECT3D_10_LAYERS </feature>
+  //   <featureStatus> BLOCKED_DRIVER_VERSION </featureStatus>
+  //   <driverVersion> 8.52.322.2202 </driverVersion>
+  //   <driverVersionMax> 8.52.322.2202 </driverVersionMax>
+  //   <driverVersionComparator> LESS_THAN_OR_EQUAL </driverVersionComparator>
+  //   <model>foo</model>
+  //   <product>foo</product>
+  //   <manufacturer>foo</manufacturer>
+  //   <hardware>foo</hardware>
+  // </gfxBlacklistEntry>
+  _handleGfxBlacklistNode: function (blocklistElement, result) {
+    const blockEntry = {};
+
+    const ATTRIBUTES = ["os", "osversion", "devices", "vendor", "feature", "featureStatus",
+                        "driverVersion", "driverVersionMax", "driverVersionComparator",
+                        "model", "product", "manufacturer", "hardware"];
+    for (var i = 0; i < blocklistElement.childNodes.length; ++i) {
+      var matchElement = blocklistElement.childNodes.item(i);
+      if (!(matchElement instanceof Ci.nsIDOMElement))
+        continue;
+      if (ATTRIBUTES.indexOf(matchElement.localName) < 0)
+        continue;
+
+      let value;
+      if (matchElement.localName == "devices") {
+        value = [];
+        for (var j = 0; j < matchElement.childNodes.length; j++) {
+          var deviceElement = matchElement.childNodes.item(j);
+          value.push(deviceElement.textContent.replace(/^\s+|\s+$/g, ""));
+        }
+      }
+      else {
+        // Every node except device is text.
+        value = matchElement.textContent.replace(/^\s+|\s+$/g, "");
+      }
+      blockEntry[matchElement.localName] = value;
+    }
+    result.push(blockEntry);
+  },
+
+  _handleAddonItemJSON: function (data) {
+    /*
+    {
+      "prefs": [],
+      "blockID": "i446",
+      "last_modified": 1457434834683,
+      "versionRange": [{
+        "targetApplication": [],
+        "maxVersion": "*",
+        "minVersion": "0",
+        "severity": "1"
+      }],
+      "guid": "{E90FA778-C2B7-41D0-9FA9-3FEC1CA54D66}",
+      "id": "87a5dc56-1fec-ebf2-a09b-6f2cbd4eb2d3"
+    }
+    */
+    const blockEntry = {
+      versions: [],
+      prefs: [],
+      blockID: null,
+      attributes: new Map()
+      // Atleast one of EXTENSION_BLOCK_FILTERS must get added to attributes
+    };
+
+    // Any filter starting with '/' is interpreted as a regex. So if an attribute
+    // starts with a '/' it must be checked via a regex.
+    function regExpCheck(attr) {
+      return attr.startsWith("/") ? parseRegExp(attr) : attr;
+    }
+
+    for (let filter of EXTENSION_BLOCK_FILTERS) {
+      // In Kinto, app `id` is `guid`.
+      let attr = data[filter == "id" ? "guid" : filter];
+      if (attr)
+        blockEntry.attributes.set(filter, regExpCheck(attr));
+    }
+
+    blockEntry.prefs = data.prefs;
+    blockEntry.blockID = data.blockID || data.id;  // Fallback to the Kinto record id.
+
+    for(let versionRange of data.versionRange) {
+      const itemData = new BlocklistItemData(null);
+      const fields = ['minVersion', 'maxVersion', 'severity', 'vulnerabilityStatus'];
+      for(let field of fields) {
+        if (versionRange[field])
+          itemData[field] = versionRange[field];
+      }
+      for(let targetApplication of versionRange.targetApplication)  {
+        // default to the current application if id is not provided.
+        const appId = targetApplication.guid || gApp.ID;
+        itemData.targetApps[appId] = targetApplication;
+      }
+      blockEntry.versions.push(itemData);
+    }
+    if (blockEntry.versions.length == 0)
+      blockEntry.versions.push(new BlocklistItemData(null));
+
+    return blockEntry;
+  },
+
+  _handlePluginItemJSON: function (data) {
+    /*
+    {
+      "matchFilename": "JavaPlugin2_NPAPI\\.plugin",
+      "blockID": "p123",
+      "id": "bdcf0717-a873-adbf-7603-83a49fb996bc",
+      "last_modified": 1457434851748,
+      "versionRange": [{
+        "targetApplication": [{
+          "minVersion": "0.1",
+          "guid": "{ec8030f7-c20a-464f-9b0e-13a3a9e97384}",
+          "maxVersion": "17.*"
+        }],
+        "maxVersion": "14.2.0",
+        "minVersion": "0",
+        "severity": "1"
+      }]
+    }
+    */
+    const blockEntry = {
+      matches: {},
+      versions: [],
+      blockID: null,
+      infoURL: null,
+    };
+
+    // Verify Matches
+    var hasMatch = false;
+    for (let prop of ["Name", "Description", "Filename"]) {
+      if (data.hasOwnProperty(`match${prop}`)) {
+        try {
+          blockEntry.matches[prop.toLowerCase()] = new RegExp(data[`match${prop}`], "m");
+          hasMatch = true;
+        } catch(e) {
+          // Ignore invalid regular expressions
+        }
+      }
+    }
+    // Plugin entries require *something* to match to an actual plugin
+    if (!hasMatch)
+      return null;
+
+    for(let versionRange of data.versionRange) {
+      const itemData = new BlocklistItemData(null);
+      const fields = ['minVersion', 'maxVersion', 'severity'];
+      for(let field of fields) {
+        if (versionRange[field])
+          itemData[field] = versionRange[field];
+      }
+      for(let targetApplication of versionRange.targetApplication)  {
+        // default to the current application if id is not provided.
+        const appId = targetApplication.guid || gApp.ID;
+        itemData.targetApps[appId] = targetApplication;
+      }
+      blockEntry.versions.push(itemData);
+    }
+    // Add a default versionRange if there wasn't one specified
+    if (blockEntry.versions.length == 0)
+      blockEntry.versions.push(new BlocklistItemData(null));
+
+    blockEntry.infoURL = data.infoURL;
+    blockEntry.blockID = data.blockID || data.id;  // Fallback to the Kinto record id.
+
+    return blockEntry;
+  },
+
+  _handleGfxItemJSON: function (data) {
+    /*
+    {
+      "driverVersionComparator": "LESS_THAN_OR_EQUAL",
+      "driverVersion": "8.17.12.5896",
+      "vendor": "0x10de",
+      "blockID": "g36",
+      "feature": "DIRECT3D_9_LAYERS",
+      "devices": ["0x0a6c"],
+      "featureStatus": "BLOCKED_DRIVER_VERSION",
+      "last_modified": 1458035931837,
+      "os": "WINNT 6.1",
+      "id": "3f947f16-37c2-4e96-d356-78b26363729b"
+    }
+    */
+    const blockEntry = Object.assign({}, data);
+    // Fallback to the Kinto record id.
+    if (!blockEntry.blockID)
+      blockEntry.blockID = blockEntry.id;
+    return blockEntry;
   },
 
   /* See nsIBlocklistService */
@@ -1228,6 +1504,51 @@ Blocklist.prototype = {
     }
 
     return blockEntry.infoURL;
+  },
+
+  _revokeCertificates() {
+    const populateCertBlocklist = getPref("getBoolPref", PREF_ONECRL_VIA_AMO, true);
+    if (!populateCertBlocklist)
+      return;
+
+    for(let entry of this._certEntries) {
+      if (entry.issuerName && entry.serialNumber) {
+        try {
+          gCertBlocklistService.revokeCertByIssuerAndSerial(entry.issuerName, entry.serialNumber);
+        } catch (e) {
+          // we want to keep trying other elements since missing all items
+          // is worse than missing one
+          LOG("Blocklist::_revokeCertificates: Error adding revoked cert by Issuer and Serial" + e);
+        }
+      }
+      else if (entry.pubKeyHash && entry.subject) {
+        try {
+          gCertBlocklistService.revokeCertBySubjectAndPubKey(entry.subject, entry.pubKeyHash);
+        } catch (e) {
+          LOG("Blocklist::_revokeCertificates: Error adding revoked cert by Subject and PubKey" + e);
+        }
+      }
+      else {
+        LOG("Blocklist::_revokeCertificates: Invalid data: " + JSON.stringify(entry));
+      }
+    }
+    gCertBlocklistService.saveEntries();
+  },
+
+  _notifyObserversBlocklistGFX: function () {
+    // Notify `GfxInfoBase`, by passing a string serialization.
+    // This way we avoid spreading XML structure logics there.
+    const payload = this._gfxEntries.map((r) => {
+      return Object.keys(r).map((key) => {
+        let value = r[key];
+        if (key === "devices")
+            value = value.join(",");
+        if (key === "versionRange")
+            value = `${value.minVersion},${value.maxVersion}`;
+        return `${key}:${value}`;
+      }).join("\t");
+    }).join("\n");
+    Services.obs.notifyObservers(null, "blocklist-data-gfxItems", payload);
   },
 
   _notifyObserversBlocklistUpdated: function() {

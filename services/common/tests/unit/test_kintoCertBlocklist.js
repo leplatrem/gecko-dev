@@ -3,7 +3,7 @@
 
 const { Constructor: CC } = Components;
 
-Cu.import("resource://services-common/KintoCertificateBlocklist.js");
+Cu.import("resource://services-common/KintoBlocklist.js");
 Cu.import("resource://services-common/moz-kinto-client.js")
 Cu.import("resource://testing-common/httpd.js");
 
