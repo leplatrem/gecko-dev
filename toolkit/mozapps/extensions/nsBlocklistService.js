@@ -1286,13 +1286,16 @@ Blocklist.prototype = {
   _notifyObserversBlocklistGFX: function () {
     // Notify `GfxInfoBase`, by passing a string serialization.
     // This way we avoid spreading XML structure logics there.
+    if (!this._gfxEntries) {
+      return;
+    }
     const payload = this._gfxEntries.map((r) => {
-      return Object.keys(r).map((key) => {
+      return Object.keys(r).sort().filter((k) => !/id|last_modified/.test(k)).map((key) => {
         let value = r[key];
         if (key === "devices")
             value = value.join(",");
         if (key === "versionRange")
-            value = `${value.minVersion},${value.maxVersion}`;
+            value = `${value.minVersion || ''},${value.maxVersion || ''}`;
         return `${key}:${value}`;
       }).join("\t");
     }).join("\n");

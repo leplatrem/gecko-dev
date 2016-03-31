@@ -405,7 +405,7 @@ BlacklistEntryToDriverInfo(nsCString& aBlacklistEntry,
     nsCString keyValue = keyValues[i];
     nsTArray<nsCString> splitted;
     ParseString(keyValue, ':', splitted);
-    if (keyValue.Length() != 2) {
+    if (splitted.Length() != 2) {
       // If we don't recognize the input data, we do not want to proceed.
       gfxWarning() << "Unrecognized data " << keyValue.get();
     }
@@ -514,7 +514,7 @@ GfxInfoBase::Observe(nsISupports* aSubject, const char* aTopic,
   if (strcmp(aTopic, "blocklist-data-gfxItems") == 0) {
     nsTArray<GfxDriverInfo> driverInfo;
     nsTArray<nsCString> blacklistEntries;
-    ParseString(NS_ConvertUTF16toUTF8(aData), '\t', blacklistEntries);
+    ParseString(NS_ConvertUTF16toUTF8(aData), '\n', blacklistEntries);
     BlacklistEntriesToDriverInfo(blacklistEntries, driverInfo);
     EvaluateDownloadedBlacklist(driverInfo);
   }
