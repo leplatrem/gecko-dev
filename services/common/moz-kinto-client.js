@@ -18,6 +18,11 @@
  */
 
 this.EXPORTED_SYMBOLS = ["loadKinto"];
+
+/*
+ * Version 1.2.0 - 3db382e
+ */
+
 (function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.loadKinto = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 "use strict";
 
@@ -29,22 +34,25 @@ var _base = require("../src/adapters/base");
 
 var _base2 = _interopRequireDefault(_base);
 
+var _utils = require("../src/utils");
+
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-Components.utils.import("resource://gre/modules/Sqlite.jsm"); /*
-                                                               * Licensed under the Apache License, Version 2.0 (the "License");
-                                                               * you may not use this file except in compliance with the License.
-                                                               * You may obtain a copy of the License at
-                                                               *
-                                                               *     http://www.apache.org/licenses/LICENSE-2.0
-                                                               *
-                                                               * Unless required by applicable law or agreed to in writing, software
-                                                               * distributed under the License is distributed on an "AS IS" BASIS,
-                                                               * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-                                                               * See the License for the specific language governing permissions and
-                                                               * limitations under the License.
-                                                               */
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
+Components.utils.import("resource://gre/modules/Sqlite.jsm");
 Components.utils.import("resource://gre/modules/Task.jsm");
 
 const statements = {
@@ -126,30 +134,9 @@ class FirefoxAdapter extends _base2.default {
         const schema = yield connection.getSchemaVersion();
 
         if (schema == 0) {
-          var _iteratorNormalCompletion = true;
-          var _didIteratorError = false;
-          var _iteratorError = undefined;
 
-          try {
-
-            for (var _iterator = createStatements[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
-              const statementName = _step.value;
-
-              yield connection.execute(statements[statementName]);
-            }
-          } catch (err) {
-            _didIteratorError = true;
-            _iteratorError = err;
-          } finally {
-            try {
-              if (!_iteratorNormalCompletion && _iterator.return) {
-                _iterator.return();
-              }
-            } finally {
-              if (_didIteratorError) {
-                throw _iteratorError;
-              }
-            }
+          for (let statementName of createStatements) {
+            yield connection.execute(statements[statementName]);
           }
 
           yield connection.setSchemaVersion(currentSchemaVersion);
@@ -210,29 +197,8 @@ class FirefoxAdapter extends _base2.default {
     }
     const conn = this._connection;
     return conn.executeTransaction(function* doExecuteTransaction() {
-      var _iteratorNormalCompletion2 = true;
-      var _didIteratorError2 = false;
-      var _iteratorError2 = undefined;
-
-      try {
-        for (var _iterator2 = proxy.operations[Symbol.iterator](), _step2; !(_iteratorNormalCompletion2 = (_step2 = _iterator2.next()).done); _iteratorNormalCompletion2 = true) {
-          const { statement, params } = _step2.value;
-
-          yield conn.executeCached(statement, params);
-        }
-      } catch (err) {
-        _didIteratorError2 = true;
-        _iteratorError2 = err;
-      } finally {
-        try {
-          if (!_iteratorNormalCompletion2 && _iterator2.return) {
-            _iterator2.return();
-          }
-        } finally {
-          if (_didIteratorError2) {
-            throw _iteratorError2;
-          }
-        }
+      for (let { statement, params } of proxy.operations) {
+        yield conn.executeCached(statement, params);
       }
     }).then(_ => result);
   }
@@ -250,17 +216,21 @@ class FirefoxAdapter extends _base2.default {
     });
   }
 
-  list() {
-    const params = {
+  list(params = { filters: {}, order: "" }) {
+    const parameters = {
       collection_name: this.collection
     };
-    return this._executeStatement(statements.listRecords, params).then(result => {
+    return this._executeStatement(statements.listRecords, parameters).then(result => {
       const records = [];
       for (let k = 0; k < result.length; k++) {
         const row = result[k];
         records.push(JSON.parse(row.getResultByName("record")));
       }
       return records;
+    }).then(results => {
+      // The resulting list of records is filtered and sorted.
+      // XXX: with some efforts, this could be implemented using SQL.
+      return (0, _utils.reduceRecords)(params.filters, params.order, results);
     });
   }
 
@@ -279,42 +249,20 @@ class FirefoxAdapter extends _base2.default {
     const collection_name = this.collection;
     return Task.spawn(function* () {
       yield connection.executeTransaction(function* doImport() {
-        var _iteratorNormalCompletion3 = true;
-        var _didIteratorError3 = false;
-        var _iteratorError3 = undefined;
-
-        try {
-          for (var _iterator3 = records[Symbol.iterator](), _step3; !(_iteratorNormalCompletion3 = (_step3 = _iterator3.next()).done); _iteratorNormalCompletion3 = true) {
-            const record = _step3.value;
-
-            const params = {
-              collection_name: collection_name,
-              record_id: record.id,
-              record: JSON.stringify(record)
-            };
-            yield connection.execute(statements.importData, params);
-          }
-        } catch (err) {
-          _didIteratorError3 = true;
-          _iteratorError3 = err;
-        } finally {
-          try {
-            if (!_iteratorNormalCompletion3 && _iterator3.return) {
-              _iterator3.return();
-            }
-          } finally {
-            if (_didIteratorError3) {
-              throw _iteratorError3;
-            }
-          }
+        for (let record of records) {
+          const params = {
+            collection_name: collection_name,
+            record_id: record.id,
+            record: JSON.stringify(record)
+          };
+          yield connection.execute(statements.importData, params);
         }
-
         const lastModified = Math.max(...records.map(record => record.last_modified));
         const params = {
           collection_name: collection_name
         };
         const previousLastModified = yield connection.execute(statements.getLastModified, params).then(result => {
-          return result ? result[0].getResultByName('last_modified') : -1;
+          return result.length > 0 ? result[0].getResultByName('last_modified') : -1;
         });
         if (lastModified > previousLastModified) {
           const params = {
@@ -398,7 +346,7 @@ function transactionProxy(collection, preloaded) {
   };
 }
 
-},{"../src/adapters/base":11}],2:[function(require,module,exports){
+},{"../src/adapters/base":25,"../src/utils":27}],2:[function(require,module,exports){
 /*
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -473,7 +421,9 @@ if (typeof module === "object") {
   module.exports = loadKinto;
 }
 
-},{"../src/KintoBase":10,"../src/adapters/base":11,"./FirefoxStorage":1}],3:[function(require,module,exports){
+},{"../src/KintoBase":24,"../src/adapters/base":25,"./FirefoxStorage":1}],3:[function(require,module,exports){
+
+},{}],4:[function(require,module,exports){
 // http://wiki.commonjs.org/wiki/Unit_Testing/1.0
 //
 // THIS IS NOT TESTED NOR LIKELY TO WORK OUTSIDE V8!
@@ -834,7 +784,307 @@ var objectKeys = Object.keys || function (obj) {
   return keys;
 };
 
-},{"util/":7}],4:[function(require,module,exports){
+},{"util/":12}],5:[function(require,module,exports){
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+function EventEmitter() {
+  this._events = this._events || {};
+  this._maxListeners = this._maxListeners || undefined;
+}
+module.exports = EventEmitter;
+
+// Backwards-compat with node 0.10.x
+EventEmitter.EventEmitter = EventEmitter;
+
+EventEmitter.prototype._events = undefined;
+EventEmitter.prototype._maxListeners = undefined;
+
+// By default EventEmitters will print a warning if more than 10 listeners are
+// added to it. This is a useful default which helps finding memory leaks.
+EventEmitter.defaultMaxListeners = 10;
+
+// Obviously not all Emitters should be limited to 10. This function allows
+// that to be increased. Set to zero for unlimited.
+EventEmitter.prototype.setMaxListeners = function(n) {
+  if (!isNumber(n) || n < 0 || isNaN(n))
+    throw TypeError('n must be a positive number');
+  this._maxListeners = n;
+  return this;
+};
+
+EventEmitter.prototype.emit = function(type) {
+  var er, handler, len, args, i, listeners;
+
+  if (!this._events)
+    this._events = {};
+
+  // If there is no 'error' event listener then throw.
+  if (type === 'error') {
+    if (!this._events.error ||
+        (isObject(this._events.error) && !this._events.error.length)) {
+      er = arguments[1];
+      if (er instanceof Error) {
+        throw er; // Unhandled 'error' event
+      }
+      throw TypeError('Uncaught, unspecified "error" event.');
+    }
+  }
+
+  handler = this._events[type];
+
+  if (isUndefined(handler))
+    return false;
+
+  if (isFunction(handler)) {
+    switch (arguments.length) {
+      // fast cases
+      case 1:
+        handler.call(this);
+        break;
+      case 2:
+        handler.call(this, arguments[1]);
+        break;
+      case 3:
+        handler.call(this, arguments[1], arguments[2]);
+        break;
+      // slower
+      default:
+        args = Array.prototype.slice.call(arguments, 1);
+        handler.apply(this, args);
+    }
+  } else if (isObject(handler)) {
+    args = Array.prototype.slice.call(arguments, 1);
+    listeners = handler.slice();
+    len = listeners.length;
+    for (i = 0; i < len; i++)
+      listeners[i].apply(this, args);
+  }
+
+  return true;
+};
+
+EventEmitter.prototype.addListener = function(type, listener) {
+  var m;
+
+  if (!isFunction(listener))
+    throw TypeError('listener must be a function');
+
+  if (!this._events)
+    this._events = {};
+
+  // To avoid recursion in the case that type === "newListener"! Before
+  // adding it to the listeners, first emit "newListener".
+  if (this._events.newListener)
+    this.emit('newListener', type,
+              isFunction(listener.listener) ?
+              listener.listener : listener);
+
+  if (!this._events[type])
+    // Optimize the case of one listener. Don't need the extra array object.
+    this._events[type] = listener;
+  else if (isObject(this._events[type]))
+    // If we've already got an array, just append.
+    this._events[type].push(listener);
+  else
+    // Adding the second element, need to change to array.
+    this._events[type] = [this._events[type], listener];
+
+  // Check for listener leak
+  if (isObject(this._events[type]) && !this._events[type].warned) {
+    if (!isUndefined(this._maxListeners)) {
+      m = this._maxListeners;
+    } else {
+      m = EventEmitter.defaultMaxListeners;
+    }
+
+    if (m && m > 0 && this._events[type].length > m) {
+      this._events[type].warned = true;
+      console.error('(node) warning: possible EventEmitter memory ' +
+                    'leak detected. %d listeners added. ' +
+                    'Use emitter.setMaxListeners() to increase limit.',
+                    this._events[type].length);
+      if (typeof console.trace === 'function') {
+        // not supported in IE 10
+        console.trace();
+      }
+    }
+  }
+
+  return this;
+};
+
+EventEmitter.prototype.on = EventEmitter.prototype.addListener;
+
+EventEmitter.prototype.once = function(type, listener) {
+  if (!isFunction(listener))
+    throw TypeError('listener must be a function');
+
+  var fired = false;
+
+  function g() {
+    this.removeListener(type, g);
+
+    if (!fired) {
+      fired = true;
+      listener.apply(this, arguments);
+    }
+  }
+
+  g.listener = listener;
+  this.on(type, g);
+
+  return this;
+};
+
+// emits a 'removeListener' event iff the listener was removed
+EventEmitter.prototype.removeListener = function(type, listener) {
+  var list, position, length, i;
+
+  if (!isFunction(listener))
+    throw TypeError('listener must be a function');
+
+  if (!this._events || !this._events[type])
+    return this;
+
+  list = this._events[type];
+  length = list.length;
+  position = -1;
+
+  if (list === listener ||
+      (isFunction(list.listener) && list.listener === listener)) {
+    delete this._events[type];
+    if (this._events.removeListener)
+      this.emit('removeListener', type, listener);
+
+  } else if (isObject(list)) {
+    for (i = length; i-- > 0;) {
+      if (list[i] === listener ||
+          (list[i].listener && list[i].listener === listener)) {
+        position = i;
+        break;
+      }
+    }
+
+    if (position < 0)
+      return this;
+
+    if (list.length === 1) {
+      list.length = 0;
+      delete this._events[type];
+    } else {
+      list.splice(position, 1);
+    }
+
+    if (this._events.removeListener)
+      this.emit('removeListener', type, listener);
+  }
+
+  return this;
+};
+
+EventEmitter.prototype.removeAllListeners = function(type) {
+  var key, listeners;
+
+  if (!this._events)
+    return this;
+
+  // not listening for removeListener, no need to emit
+  if (!this._events.removeListener) {
+    if (arguments.length === 0)
+      this._events = {};
+    else if (this._events[type])
+      delete this._events[type];
+    return this;
+  }
+
+  // emit removeListener for all listeners on all events
+  if (arguments.length === 0) {
+    for (key in this._events) {
+      if (key === 'removeListener') continue;
+      this.removeAllListeners(key);
+    }
+    this.removeAllListeners('removeListener');
+    this._events = {};
+    return this;
+  }
+
+  listeners = this._events[type];
+
+  if (isFunction(listeners)) {
+    this.removeListener(type, listeners);
+  } else if (listeners) {
+    // LIFO order
+    while (listeners.length)
+      this.removeListener(type, listeners[listeners.length - 1]);
+  }
+  delete this._events[type];
+
+  return this;
+};
+
+EventEmitter.prototype.listeners = function(type) {
+  var ret;
+  if (!this._events || !this._events[type])
+    ret = [];
+  else if (isFunction(this._events[type]))
+    ret = [this._events[type]];
+  else
+    ret = this._events[type].slice();
+  return ret;
+};
+
+EventEmitter.prototype.listenerCount = function(type) {
+  if (this._events) {
+    var evlistener = this._events[type];
+
+    if (isFunction(evlistener))
+      return 1;
+    else if (evlistener)
+      return evlistener.length;
+  }
+  return 0;
+};
+
+EventEmitter.listenerCount = function(emitter, type) {
+  return emitter.listenerCount(type);
+};
+
+function isFunction(arg) {
+  return typeof arg === 'function';
+}
+
+function isNumber(arg) {
+  return typeof arg === 'number';
+}
+
+function isObject(arg) {
+  return typeof arg === 'object' && arg !== null;
+}
+
+function isUndefined(arg) {
+  return arg === void 0;
+}
+
+},{}],6:[function(require,module,exports){
 if (typeof Object.create === 'function') {
   // implementation from standard node.js 'util' module
   module.exports = function inherits(ctor, superCtor) {
@@ -859,7 +1109,7 @@ if (typeof Object.create === 'function') {
   }
 }
 
-},{}],5:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
 // shim for using process in browser
 
 var process = module.exports = {};
@@ -952,14 +1202,193 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],6:[function(require,module,exports){
+},{}],8:[function(require,module,exports){
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+'use strict';
+
+// If obj.hasOwnProperty has been overridden, then calling
+// obj.hasOwnProperty(prop) will break.
+// See: https://github.com/joyent/node/issues/1707
+function hasOwnProperty(obj, prop) {
+  return Object.prototype.hasOwnProperty.call(obj, prop);
+}
+
+module.exports = function(qs, sep, eq, options) {
+  sep = sep || '&';
+  eq = eq || '=';
+  var obj = {};
+
+  if (typeof qs !== 'string' || qs.length === 0) {
+    return obj;
+  }
+
+  var regexp = /\+/g;
+  qs = qs.split(sep);
+
+  var maxKeys = 1000;
+  if (options && typeof options.maxKeys === 'number') {
+    maxKeys = options.maxKeys;
+  }
+
+  var len = qs.length;
+  // maxKeys <= 0 means that we should not limit keys count
+  if (maxKeys > 0 && len > maxKeys) {
+    len = maxKeys;
+  }
+
+  for (var i = 0; i < len; ++i) {
+    var x = qs[i].replace(regexp, '%20'),
+        idx = x.indexOf(eq),
+        kstr, vstr, k, v;
+
+    if (idx >= 0) {
+      kstr = x.substr(0, idx);
+      vstr = x.substr(idx + 1);
+    } else {
+      kstr = x;
+      vstr = '';
+    }
+
+    k = decodeURIComponent(kstr);
+    v = decodeURIComponent(vstr);
+
+    if (!hasOwnProperty(obj, k)) {
+      obj[k] = v;
+    } else if (isArray(obj[k])) {
+      obj[k].push(v);
+    } else {
+      obj[k] = [obj[k], v];
+    }
+  }
+
+  return obj;
+};
+
+var isArray = Array.isArray || function (xs) {
+  return Object.prototype.toString.call(xs) === '[object Array]';
+};
+
+},{}],9:[function(require,module,exports){
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+'use strict';
+
+var stringifyPrimitive = function(v) {
+  switch (typeof v) {
+    case 'string':
+      return v;
+
+    case 'boolean':
+      return v ? 'true' : 'false';
+
+    case 'number':
+      return isFinite(v) ? v : '';
+
+    default:
+      return '';
+  }
+};
+
+module.exports = function(obj, sep, eq, name) {
+  sep = sep || '&';
+  eq = eq || '=';
+  if (obj === null) {
+    obj = undefined;
+  }
+
+  if (typeof obj === 'object') {
+    return map(objectKeys(obj), function(k) {
+      var ks = encodeURIComponent(stringifyPrimitive(k)) + eq;
+      if (isArray(obj[k])) {
+        return map(obj[k], function(v) {
+          return ks + encodeURIComponent(stringifyPrimitive(v));
+        }).join(sep);
+      } else {
+        return ks + encodeURIComponent(stringifyPrimitive(obj[k]));
+      }
+    }).join(sep);
+
+  }
+
+  if (!name) return '';
+  return encodeURIComponent(stringifyPrimitive(name)) + eq +
+         encodeURIComponent(stringifyPrimitive(obj));
+};
+
+var isArray = Array.isArray || function (xs) {
+  return Object.prototype.toString.call(xs) === '[object Array]';
+};
+
+function map (xs, f) {
+  if (xs.map) return xs.map(f);
+  var res = [];
+  for (var i = 0; i < xs.length; i++) {
+    res.push(f(xs[i], i));
+  }
+  return res;
+}
+
+var objectKeys = Object.keys || function (obj) {
+  var res = [];
+  for (var key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) res.push(key);
+  }
+  return res;
+};
+
+},{}],10:[function(require,module,exports){
+'use strict';
+
+exports.decode = exports.parse = require('./decode');
+exports.encode = exports.stringify = require('./encode');
+
+},{"./decode":8,"./encode":9}],11:[function(require,module,exports){
 module.exports = function isBuffer(arg) {
   return arg && typeof arg === 'object'
     && typeof arg.copy === 'function'
     && typeof arg.fill === 'function'
     && typeof arg.readUInt8 === 'function';
 }
-},{}],7:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 (function (process,global){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -1549,7 +1978,2227 @@ function hasOwnProperty(obj, prop) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./support/isBuffer":6,"_process":5,"inherits":4}],8:[function(require,module,exports){
+},{"./support/isBuffer":11,"_process":7,"inherits":6}],13:[function(require,module,exports){
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.aggregate = aggregate;
+/**
+ * Exports batch responses as a result object.
+ *
+ * @private
+ * @param  {Array} responses The batch subrequest responses.
+ * @param  {Array} requests  The initial issued requests.
+ * @return {Object}
+ */
+function aggregate() {
+  var responses = arguments.length <= 0 || arguments[0] === undefined ? [] : arguments[0];
+  var requests = arguments.length <= 1 || arguments[1] === undefined ? [] : arguments[1];
+
+  if (responses.length !== requests.length) {
+    throw new Error("Responses length should match requests one.");
+  }
+  var results = {
+    errors: [],
+    published: [],
+    conflicts: [],
+    skipped: []
+  };
+  return responses.reduce(function (acc, response, index) {
+    var status = response.status;
+
+    if (status >= 200 && status < 400) {
+      acc.published.push(response.body);
+    } else if (status === 404) {
+      acc.skipped.push(response.body);
+    } else if (status === 412) {
+      acc.conflicts.push({
+        // XXX: specifying the type is probably superfluous
+        type: "outgoing",
+        local: requests[index].body,
+        remote: response.body.details && response.body.details.existing || null
+      });
+    } else {
+      acc.errors.push({
+        path: response.path,
+        sent: requests[index],
+        error: response.body
+      });
+    }
+    return acc;
+  }, results);
+}
+},{}],14:[function(require,module,exports){
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = undefined;
+
+var _extends = Object.assign || function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; };
+
+var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+
+var _utils = require("./utils");
+
+var _collection = require("./collection");
+
+var _collection2 = _interopRequireDefault(_collection);
+
+var _requests = require("./requests");
+
+var requests = _interopRequireWildcard(_requests);
+
+var _endpoint = require("./endpoint");
+
+var _endpoint2 = _interopRequireDefault(_endpoint);
+
+function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) newObj[key] = obj[key]; } } newObj.default = obj; return newObj; } }
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+
+/**
+ * Abstract representation of a selected bucket.
+ *
+ */
+
+var Bucket = function () {
+  /**
+   * Constructor.
+   *
+   * @param  {KintoClient} client          The client instance.
+   * @param  {String}      name            The bucket name.
+   * @param  {Object}      options.headers The headers object option.
+   * @param  {Boolean}     options.safe    The safe option.
+   */
+
+  function Bucket(client, name) {
+    var options = arguments.length <= 2 || arguments[2] === undefined ? {} : arguments[2];
+
+    _classCallCheck(this, Bucket);
+
+    /**
+     * @ignore
+     */
+    this.client = client;
+    /**
+     * The bucket name.
+     * @type {String}
+     */
+    this.name = name;
+    /**
+     * The default options object.
+     * @ignore
+     * @type {Object}
+     */
+    this.options = options;
+    /**
+     * @ignore
+     */
+    this._isBatch = !!options.batch;
+  }
+
+  /**
+   * Merges passed request options with default bucket ones, if any.
+   *
+   * @private
+   * @param  {Object} options The options to merge.
+   * @return {Object}         The merged options.
+   */
+
+
+  _createClass(Bucket, [{
+    key: "_bucketOptions",
+    value: function _bucketOptions() {
+      var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+
+      var headers = _extends({}, this.options && this.options.headers, options.headers);
+      return _extends({}, this.options, options, {
+        headers: headers,
+        bucket: this.name,
+        batch: this._isBatch
+      });
+    }
+
+    /**
+     * Selects a collection.
+     *
+     * @param  {String} name            The collection name.
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @param  {Boolean}  options.safe  The safe option.
+     * @return {Collection}
+     */
+
+  }, {
+    key: "collection",
+    value: function collection(name, options) {
+      return new _collection2.default(this.client, this, name, this._bucketOptions(options));
+    }
+
+    /**
+     * Retrieves bucket properties.
+     *
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "getAttributes",
+    value: function getAttributes() {
+      var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+
+      return this.client.execute({
+        path: (0, _endpoint2.default)("bucket", this.name),
+        headers: _extends({}, this.options.headers, options.headers)
+      });
+    }
+
+    /**
+     * Retrieves the list of collections in the current bucket.
+     *
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @return {Promise<Array<Object>, Error>}
+     */
+
+  }, {
+    key: "listCollections",
+    value: function listCollections() {
+      var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+
+      return this.client.execute({
+        path: (0, _endpoint2.default)("collections", this.name),
+        headers: _extends({}, this.options.headers, options.headers)
+      });
+    }
+
+    /**
+     * Creates a new collection in current bucket.
+     *
+     * @param  {String|undefined}  id        The collection id.
+     * @param  {Object}  options             The options object.
+     * @param  {Boolean} options.safe        The safe option.
+     * @param  {Object}  options.headers     The headers object option.
+     * @param  {Object}  options.permissions The permissions object.
+     * @param  {Object}  options.data        The metadadata object.
+     * @param  {Object}  options.schema      The JSONSchema object.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "createCollection",
+    value: function createCollection(id, options) {
+      var reqOptions = this._bucketOptions(options);
+      var request = requests.createCollection(id, reqOptions);
+      return this.client.execute(request);
+    }
+
+    /**
+     * Deletes a collection from the current bucket.
+     *
+     * @param  {Object|String} collection  The collection to delete.
+     * @param  {Object}    options         The options object.
+     * @param  {Object}    options.headers The headers object option.
+     * @param  {Boolean}   options.safe    The safe option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "deleteCollection",
+    value: function deleteCollection(collection, options) {
+      var reqOptions = this._bucketOptions(options);
+      var request = requests.deleteCollection((0, _utils.toDataBody)(collection), reqOptions);
+      return this.client.execute(request);
+    }
+
+    /**
+     * Retrieves the list of permissions for this bucket.
+     *
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "getPermissions",
+    value: function getPermissions(options) {
+      return this.getAttributes(this._bucketOptions(options)).then(function (res) {
+        return res.permissions;
+      });
+    }
+
+    /**
+     * Recplaces all existing bucket permissions with the ones provided.
+     *
+     * @param  {Object}  permissions           The permissions object.
+     * @param  {Object}  options               The options object
+     * @param  {Object}  options               The options object.
+     * @param  {Boolean} options.safe          The safe option.
+     * @param  {Object}  options.headers       The headers object option.
+     * @param  {Object}  options.last_modified The last_modified option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "setPermissions",
+    value: function setPermissions(permissions) {
+      var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+      return this.client.execute(requests.updateBucket({
+        id: this.name,
+        last_modified: options.last_modified
+      }, _extends({}, this._bucketOptions(options), { permissions: permissions })));
+    }
+
+    /**
+     * Performs batch operations at the current bucket level.
+     *
+     * @param  {Function} fn                 The batch operation function.
+     * @param  {Object}   options            The options object.
+     * @param  {Object}   options.headers    The headers object option.
+     * @param  {Boolean}  options.safe       The safe option.
+     * @param  {Boolean}  options.aggregate  Produces a grouped result object.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "batch",
+    value: function batch(fn, options) {
+      return this.client.batch(fn, this._bucketOptions(options));
+    }
+  }]);
+
+  return Bucket;
+}();
+
+exports.default = Bucket;
+},{"./collection":15,"./endpoint":16,"./requests":20,"./utils":21}],15:[function(require,module,exports){
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = undefined;
+
+var _extends = Object.assign || function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; };
+
+var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+
+var _utils = require("./utils");
+
+var _requests = require("./requests");
+
+var requests = _interopRequireWildcard(_requests);
+
+var _endpoint = require("./endpoint");
+
+var _endpoint2 = _interopRequireDefault(_endpoint);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) newObj[key] = obj[key]; } } newObj.default = obj; return newObj; } }
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+
+/**
+ * Abstract representation of a selected collection.
+ *
+ */
+
+var Collection = function () {
+  /**
+   * Constructor.
+   *
+   * @param  {KintoClient}  client          The client instance.
+   * @param  {Bucket}       bucket          The bucket instance.
+   * @param  {String}       name            The collection name.
+   * @param  {Object}       options.headers The headers object option.
+   * @param  {Boolean}      options.safe    The safe option.
+   */
+
+  function Collection(client, bucket, name) {
+    var options = arguments.length <= 3 || arguments[3] === undefined ? {} : arguments[3];
+
+    _classCallCheck(this, Collection);
+
+    /**
+     * @ignore
+     */
+    this.client = client;
+    /**
+     * @ignore
+     */
+    this.bucket = bucket;
+    /**
+     * The collection name.
+     * @type {String}
+     */
+    this.name = name;
+
+    /**
+     * The default collection options object, embedding the default bucket ones.
+     * @ignore
+     * @type {Object}
+     */
+    this.options = _extends({}, this.bucket.options, options, {
+      headers: _extends({}, this.bucket.options && this.bucket.options.headers, options.headers)
+    });
+    /**
+     * @ignore
+     */
+    this._isBatch = !!options.batch;
+  }
+
+  /**
+   * Merges passed request options with default bucket and collection ones, if
+   * any.
+   *
+   * @private
+   * @param  {Object} options The options to merge.
+   * @return {Object}         The merged options.
+   */
+
+
+  _createClass(Collection, [{
+    key: "_collOptions",
+    value: function _collOptions() {
+      var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+
+      var headers = _extends({}, this.options && this.options.headers, options.headers);
+      return _extends({}, this.options, options, {
+        headers: headers,
+        // XXX soon to be removed once we've migrated everything from KintoClient
+        bucket: this.bucket.name
+      });
+    }
+
+    /**
+     * Updates current collection properties.
+     *
+     * @private
+     * @param  {Object} options  The request options.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "_updateAttributes",
+    value: function _updateAttributes() {
+      var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+
+      var collection = (0, _utils.toDataBody)(this.name);
+      var reqOptions = this._collOptions(options);
+      var request = requests.updateCollection(collection, reqOptions);
+      return this.client.execute(request);
+    }
+
+    /**
+     * Retrieves collection properties.
+     *
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "getAttributes",
+    value: function getAttributes(options) {
+      var _collOptions2 = this._collOptions(options);
+
+      var headers = _collOptions2.headers;
+
+      return this.client.execute({
+        path: (0, _endpoint2.default)("collection", this.bucket.name, this.name),
+        headers: headers
+      });
+    }
+
+    /**
+     * Retrieves the list of permissions for this collection.
+     *
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "getPermissions",
+    value: function getPermissions(options) {
+      return this.getAttributes(options).then(function (res) {
+        return res.permissions;
+      });
+    }
+
+    /**
+     * Replaces all existing collection permissions with the ones provided.
+     *
+     * @param  {Object}   permissions     The permissions object.
+     * @param  {Object}   options         The options object
+     * @param  {Object}   options.headers The headers object option.
+     * @param  {Boolean}  options.safe    The safe option.
+     * @param  {Number}   options.last_modified The last_modified option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "setPermissions",
+    value: function setPermissions(permissions, options) {
+      return this._updateAttributes(_extends({}, options, { permissions: permissions }));
+    }
+
+    /**
+     * Retrieves the JSON schema for this collection, if any.
+     *
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @return {Promise<Object|null, Error>}
+     */
+
+  }, {
+    key: "getSchema",
+    value: function getSchema(options) {
+      return this.getAttributes(options).then(function (res) {
+        return res.data && res.data.schema || null;
+      });
+    }
+
+    /**
+     * Sets the JSON schema for this collection.
+     *
+     * @param  {Object}   schema          The JSON schema object.
+     * @param  {Object}   options         The options object.
+     * @param  {Object}   options.headers The headers object option.
+     * @param  {Boolean}  options.safe    The safe option.
+     * @param  {Number}   options.last_modified The last_modified option.
+     * @return {Promise<Object|null, Error>}
+     */
+
+  }, {
+    key: "setSchema",
+    value: function setSchema(schema, options) {
+      return this._updateAttributes(_extends({}, options, { schema: schema }));
+    }
+
+    /**
+     * Retrieves metadata attached to current collection.
+     *
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "getMetadata",
+    value: function getMetadata(options) {
+      return this.getAttributes(options).then(function (_ref) {
+        var data = _ref.data;
+        return (0, _utils.omit)(data, "schema");
+      });
+    }
+
+    /**
+     * Sets metadata for current collection.
+     *
+     * @param  {Object}   metadata        The metadata object.
+     * @param  {Object}   options         The options object.
+     * @param  {Object}   options.headers The headers object option.
+     * @param  {Boolean}  options.safe  The safe option.
+     * @param  {Number}   options.last_modified The last_modified option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "setMetadata",
+    value: function setMetadata(metadata, options) {
+      // Note: patching allows preventing overridding the schema, which lives
+      // within the "data" namespace.
+      return this._updateAttributes(_extends({}, options, { metadata: metadata, patch: true }));
+    }
+
+    /**
+     * Creates a record in current collection.
+     *
+     * @param  {Object} record          The record to create.
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @param  {Boolean}  options.safe  The safe option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "createRecord",
+    value: function createRecord(record, options) {
+      var reqOptions = this._collOptions(options);
+      var request = requests.createRecord(this.name, record, reqOptions);
+      return this.client.execute(request);
+    }
+
+    /**
+     * Updates a record in current collection.
+     *
+     * @param  {Object}  record                The record to update.
+     * @param  {Object}  options               The options object.
+     * @param  {Object}  options.headers       The headers object option.
+     * @param  {Boolean} options.safe          The safe option.
+     * @param  {Number}  options.last_modified The last_modified option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "updateRecord",
+    value: function updateRecord(record, options) {
+      var reqOptions = this._collOptions(options);
+      var request = requests.updateRecord(this.name, record, reqOptions);
+      return this.client.execute(request);
+    }
+
+    /**
+     * Deletes a record from the current collection.
+     *
+     * @param  {Object|String} record          The record to delete.
+     * @param  {Object}        options         The options object.
+     * @param  {Object}        options.headers The headers object option.
+     * @param  {Boolean}       options.safe    The safe option.
+     * @param  {Number}        options.last_modified The last_modified option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "deleteRecord",
+    value: function deleteRecord(record, options) {
+      var reqOptions = this._collOptions(options);
+      var request = requests.deleteRecord(this.name, (0, _utils.toDataBody)(record), reqOptions);
+      return this.client.execute(request);
+    }
+
+    /**
+     * Retrieves a record from the current collection.
+     *
+     * @param  {String} id              The record id to retrieve.
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "getRecord",
+    value: function getRecord(id, options) {
+      return this.client.execute(_extends({
+        path: (0, _endpoint2.default)("record", this.bucket.name, this.name, id)
+      }, this._collOptions(options)));
+    }
+
+    /**
+     * Lists records from the current collection.
+     *
+     * Sorting is done by passing a `sort` string option:
+     *
+     * - The field to order the results by, prefixed with `-` for descending.
+     * Default: `-last_modified`.
+     *
+     * @see http://kinto.readthedocs.org/en/latest/api/1.x/cliquet/resource.html#sorting
+     *
+     * Filtering is done by passing a `filters` option object:
+     *
+     * - `{fieldname: "value"}`
+     * - `{min_fieldname: 4000}`
+     * - `{in_fieldname: "1,2,3"}`
+     * - `{not_fieldname: 0}`
+     * - `{exclude_fieldname: "0,1"}`
+     *
+     * @see http://kinto.readthedocs.org/en/latest/api/1.x/cliquet/resource.html#filtering
+     *
+     * Paginating is done by passing a `limit` option, then calling the `next()`
+     * method from the resolved result object to fetch the next page, if any.
+     *
+     * @param  {Object}   options         The options object.
+     * @param  {Object}   options.headers The headers object option.
+     * @param  {Object}   options.filters The filters object.
+     * @param  {String}   options.sort    The sort field.
+     * @param  {String}   options.limit   The limit field.
+     * @param  {String}   options.pages   The number of result pages to aggregate.
+     * @param  {Number}   options.since   Only retrieve records modified since the
+     * provided timestamp.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "listRecords",
+    value: function listRecords() {
+      var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+      var http = this.client.http;
+
+      var _sort$options = _extends({
+        sort: "-last_modified"
+      }, options);
+
+      var sort = _sort$options.sort;
+      var filters = _sort$options.filters;
+      var limit = _sort$options.limit;
+      var pages = _sort$options.pages;
+      var since = _sort$options.since;
+
+      var collHeaders = this.options.headers;
+      var path = (0, _endpoint2.default)("records", this.bucket.name, this.name);
+      var querystring = (0, _utils.qsify)(_extends({}, filters, {
+        _sort: sort,
+        _limit: limit,
+        _since: since
+      }));
+      var results = [],
+          current = 0;
+
+      var next = function next(nextPage) {
+        if (!nextPage) {
+          throw new Error("Pagination exhausted.");
+        }
+        return processNextPage(nextPage);
+      };
+
+      var processNextPage = function processNextPage(nextPage) {
+        return http.request(nextPage, { headers: collHeaders }).then(handleResponse);
+      };
+
+      var pageResults = function pageResults(results, nextPage, etag) {
+        return {
+          last_modified: etag,
+          data: results,
+          next: next.bind(null, nextPage)
+        };
+      };
+
+      var handleResponse = function handleResponse(_ref2) {
+        var headers = _ref2.headers;
+        var json = _ref2.json;
+
+        var nextPage = headers.get("Next-Page");
+        // ETag are supposed to be opaque and stored «as-is».
+        var etag = headers.get("ETag");
+        if (!pages) {
+          return pageResults(json.data, nextPage, etag);
+        }
+        // Aggregate new results with previous ones
+        results = results.concat(json.data);
+        current += 1;
+        if (current >= pages || !nextPage) {
+          // Pagination exhausted
+          return pageResults(results, nextPage, etag);
+        }
+        // Follow next page
+        return processNextPage(nextPage);
+      };
+
+      return this.client.execute(_extends({
+        path: path + "?" + querystring
+      }, this._collOptions(options)), { raw: true }).then(handleResponse);
+    }
+
+    /**
+     * Performs batch operations at the current collection level.
+     *
+     * @param  {Function} fn                 The batch operation function.
+     * @param  {Object}   options            The options object.
+     * @param  {Object}   options.headers    The headers object option.
+     * @param  {Boolean}  options.safe       The safe option.
+     * @param  {Boolean}  options.aggregate  Produces a grouped result object.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "batch",
+    value: function batch(fn, options) {
+      var reqOptions = this._collOptions(options);
+      return this.client.batch(fn, _extends({}, reqOptions, {
+        collection: this.name
+      }));
+    }
+  }]);
+
+  return Collection;
+}();
+
+exports.default = Collection;
+},{"./endpoint":16,"./requests":20,"./utils":21}],16:[function(require,module,exports){
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = endpoint;
+/**
+ * Endpoints templates.
+ * @type {Object}
+ */
+var ENDPOINTS = {
+  root: function root() {
+    return "/";
+  },
+  batch: function batch() {
+    return "/batch";
+  },
+  buckets: function buckets() {
+    return "/buckets";
+  },
+  bucket: function bucket(_bucket) {
+    return "/buckets/" + _bucket;
+  },
+  collections: function collections(bucket) {
+    return ENDPOINTS.bucket(bucket) + "/collections";
+  },
+  collection: function collection(bucket, coll) {
+    return ENDPOINTS.bucket(bucket) + "/collections/" + coll;
+  },
+  records: function records(bucket, coll) {
+    return ENDPOINTS.collection(bucket, coll) + "/records";
+  },
+  record: function record(bucket, coll, id) {
+    return ENDPOINTS.records(bucket, coll) + "/" + id;
+  }
+};
+
+/**
+ * Retrieves a server enpoint by its name.
+ *
+ * @private
+ * @param  {String}    name The endpoint name.
+ * @param  {...string} args The endpoint parameters.
+ * @return {String}
+ */
+function endpoint(name) {
+  for (var _len = arguments.length, args = Array(_len > 1 ? _len - 1 : 0), _key = 1; _key < _len; _key++) {
+    args[_key - 1] = arguments[_key];
+  }
+
+  return ENDPOINTS[name].apply(ENDPOINTS, args);
+}
+},{}],17:[function(require,module,exports){
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+/**
+ * Kinto server error code descriptors.
+ * @type {Object}
+ */
+exports.default = {
+  104: "Missing Authorization Token",
+  105: "Invalid Authorization Token",
+  106: "Request body was not valid JSON",
+  107: "Invalid request parameter",
+  108: "Missing request parameter",
+  109: "Invalid posted data",
+  110: "Invalid Token / id",
+  111: "Missing Token / id",
+  112: "Content-Length header was not provided",
+  113: "Request body too large",
+  114: "Resource was modified meanwhile",
+  115: "Method not allowed on this end point",
+  116: "Requested version not available on this server",
+  117: "Client has sent too many requests",
+  121: "Resource access is forbidden for this user",
+  122: "Another resource violates constraint",
+  201: "Service Temporary unavailable due to high load",
+  202: "Service deprecated",
+  999: "Internal Server Error"
+};
+},{}],18:[function(require,module,exports){
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = undefined;
+
+var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+
+var _errors = require("./errors");
+
+var _errors2 = _interopRequireDefault(_errors);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+
+/**
+ * Enhanced HTTP client for the Kinto protocol.
+ * @private
+ */
+
+var HTTP = function () {
+  _createClass(HTTP, null, [{
+    key: "DEFAULT_REQUEST_HEADERS",
+
+    /**
+     * Default HTTP request headers applied to each outgoing request.
+     *
+     * @type {Object}
+     */
+    get: function get() {
+      return {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+      };
+    }
+
+    /**
+     * Default options.
+     *
+     * @type {Object}
+     */
+
+  }, {
+    key: "defaultOptions",
+    get: function get() {
+      return { timeout: 5000, requestMode: "cors" };
+    }
+
+    /**
+     * Constructor.
+     *
+     * Options:
+     * - {Number} timeout      The request timeout in ms (default: `5000`).
+     * - {String} requestMode  The HTTP request mode (default: `"cors"`).
+     *
+     * @param {EventEmitter} events  The event handler.
+     * @param {Object}       options The options object.
+     */
+
+  }]);
+
+  function HTTP(events) {
+    var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+    _classCallCheck(this, HTTP);
+
+    // public properties
+    /**
+     * The event emitter instance.
+     * @type {EventEmitter}
+     */
+    if (!events) {
+      throw new Error("No events handler provided");
+    }
+    this.events = events;
+
+    options = Object.assign({}, HTTP.defaultOptions, options);
+
+    /**
+     * The request mode.
+     * @see  https://fetch.spec.whatwg.org/#requestmode
+     * @type {String}
+     */
+    this.requestMode = options.requestMode;
+
+    /**
+     * The request timeout.
+     * @type {Number}
+     */
+    this.timeout = options.timeout;
+  }
+
+  /**
+   * Performs an HTTP request to the Kinto server.
+   *
+   * Options:
+   * - `{Object} headers` The request headers object (default: {})
+   *
+   * Resolves with an objet containing the following HTTP response properties:
+   * - `{Number}  status`  The HTTP status code.
+   * - `{Object}  json`    The JSON response body.
+   * - `{Headers} headers` The response headers object; see the ES6 fetch() spec.
+   *
+   * @param  {String} url     The URL.
+   * @param  {Object} options The fetch() options object.
+   * @return {Promise}
+   */
+
+
+  _createClass(HTTP, [{
+    key: "request",
+    value: function request(url) {
+      var _this = this;
+
+      var options = arguments.length <= 1 || arguments[1] === undefined ? { headers: {} } : arguments[1];
+
+      var response = void 0,
+          status = void 0,
+          statusText = void 0,
+          headers = void 0,
+          hasTimedout = void 0;
+      // Ensure default request headers are always set
+      options.headers = Object.assign({}, HTTP.DEFAULT_REQUEST_HEADERS, options.headers);
+      options.mode = this.requestMode;
+      return new Promise(function (resolve, reject) {
+        var _timeoutId = setTimeout(function () {
+          hasTimedout = true;
+          reject(new Error("Request timeout."));
+        }, _this.timeout);
+        fetch(url, options).then(function (res) {
+          if (!hasTimedout) {
+            clearTimeout(_timeoutId);
+            resolve(res);
+          }
+        }).catch(function (err) {
+          if (!hasTimedout) {
+            clearTimeout(_timeoutId);
+            reject(err);
+          }
+        });
+      }).then(function (res) {
+        response = res;
+        headers = res.headers;
+        status = res.status;
+        statusText = res.statusText;
+        _this._checkForDeprecationHeader(headers);
+        _this._checkForBackoffHeader(status, headers);
+        return res.text();
+      })
+      // Check if we have a body; if so parse it as JSON.
+      .then(function (text) {
+        if (text.length === 0) {
+          return null;
+        }
+        // Note: we can't consume the response body twice.
+        return JSON.parse(text);
+      }).catch(function (err) {
+        var error = new Error("HTTP " + (status || 0) + "; " + err);
+        error.response = response;
+        error.stack = err.stack;
+        throw error;
+      }).then(function (json) {
+        if (json && status >= 400) {
+          var message = "HTTP " + status + " " + (json.error || "") + ": ";
+          if (json.errno && json.errno in _errors2.default) {
+            var errnoMsg = _errors2.default[json.errno];
+            message += errnoMsg;
+            if (json.message && json.message !== errnoMsg) {
+              message += " (" + json.message + ")";
+            }
+          } else {
+            message += statusText || "";
+          }
+          var error = new Error(message.trim());
+          error.response = response;
+          error.data = json;
+          throw error;
+        }
+        return { status: status, json: json, headers: headers };
+      });
+    }
+  }, {
+    key: "_checkForDeprecationHeader",
+    value: function _checkForDeprecationHeader(headers) {
+      var alertHeader = headers.get("Alert");
+      if (!alertHeader) {
+        return;
+      }
+      var alert = void 0;
+      try {
+        alert = JSON.parse(alertHeader);
+      } catch (err) {
+        console.warn("Unable to parse Alert header message", alertHeader);
+        return;
+      }
+      console.warn(alert.message, alert.url);
+      this.events.emit("deprecated", alert);
+    }
+  }, {
+    key: "_checkForBackoffHeader",
+    value: function _checkForBackoffHeader(status, headers) {
+      var backoffMs = void 0;
+      var backoffSeconds = parseInt(headers.get("Backoff"), 10);
+      if (backoffSeconds > 0) {
+        backoffMs = new Date().getTime() + backoffSeconds * 1000;
+      } else {
+        backoffMs = 0;
+      }
+      this.events.emit("backoff", backoffMs);
+    }
+  }]);
+
+  return HTTP;
+}();
+
+exports.default = HTTP;
+},{"./errors":17}],19:[function(require,module,exports){
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = exports.SUPPORTED_PROTOCOL_VERSION = undefined;
+
+var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol ? "symbol" : typeof obj; };
+
+var _extends = Object.assign || function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; };
+
+var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+
+var _dec, _dec2, _dec3, _dec4, _dec5, _dec6, _desc, _value, _class;
+
+require("isomorphic-fetch");
+
+var _events = require("events");
+
+var _utils = require("./utils");
+
+var _http = require("./http");
+
+var _http2 = _interopRequireDefault(_http);
+
+var _endpoint = require("./endpoint");
+
+var _endpoint2 = _interopRequireDefault(_endpoint);
+
+var _requests = require("./requests");
+
+var requests = _interopRequireWildcard(_requests);
+
+var _batch = require("./batch");
+
+var _bucket2 = require("./bucket");
+
+var _bucket3 = _interopRequireDefault(_bucket2);
+
+function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) newObj[key] = obj[key]; } } newObj.default = obj; return newObj; } }
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+
+function _applyDecoratedDescriptor(target, property, decorators, descriptor, context) {
+  var desc = {};
+  Object['ke' + 'ys'](descriptor).forEach(function (key) {
+    desc[key] = descriptor[key];
+  });
+  desc.enumerable = !!desc.enumerable;
+  desc.configurable = !!desc.configurable;
+
+  if ('value' in desc || desc.initializer) {
+    desc.writable = true;
+  }
+
+  desc = decorators.slice().reverse().reduce(function (desc, decorator) {
+    return decorator(target, property, desc) || desc;
+  }, desc);
+
+  if (context && desc.initializer !== void 0) {
+    desc.value = desc.initializer ? desc.initializer.call(context) : void 0;
+    desc.initializer = undefined;
+  }
+
+  if (desc.initializer === void 0) {
+    Object['define' + 'Property'](target, property, desc);
+    desc = null;
+  }
+
+  return desc;
+}
+
+/**
+ * Currently supported protocol version.
+ * @type {String}
+ */
+var SUPPORTED_PROTOCOL_VERSION = exports.SUPPORTED_PROTOCOL_VERSION = "v1";
+
+/**
+ * High level HTTP client for the Kinto API.
+ *
+ * @example
+ * const client = new KintoClient("https://kinto.dev.mozaws.net/v1");
+ * client.bucket("default")
+*    .collection("my-blog")
+*    .createRecord({title: "First article"})
+ *   .then(console.log.bind(console))
+ *   .catch(console.error.bind(console));
+ */
+var KintoClient = (_dec = (0, _utils.nobatch)("This operation is not supported within a batch operation."), _dec2 = (0, _utils.nobatch)("This operation is not supported within a batch operation."), _dec3 = (0, _utils.nobatch)("This operation is not supported within a batch operation."), _dec4 = (0, _utils.nobatch)("This operation is not supported within a batch operation."), _dec5 = (0, _utils.nobatch)("Can't use batch within a batch!"), _dec6 = (0, _utils.support)("1.4", "2.0"), (_class = function () {
+  /**
+   * Constructor.
+   *
+   * @param  {String} remote  The remote URL.
+   * @param  {Object}  options The options object.
+   * @param  {Boolean} options.safe        Adds concurrency headers to every
+   * requests (default: `true`).
+   * @param  {EventEmitter} options.events The events handler. If none provided
+   * an `EventEmitter` instance will be created.
+   * @param  {Object}  options.headers     The key-value headers to pass to each
+   * request (default: `{}`).
+   * @param  {String}  options.bucket      The default bucket to use (default:
+   * `"default"`)
+   * @param  {String}  options.requestMode The HTTP request mode (from ES6 fetch
+   * spec).
+   */
+
+  function KintoClient(remote) {
+    var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+    _classCallCheck(this, KintoClient);
+
+    if (typeof remote !== "string" || !remote.length) {
+      throw new Error("Invalid remote URL: " + remote);
+    }
+    if (remote[remote.length - 1] === "/") {
+      remote = remote.slice(0, -1);
+    }
+    this._backoffReleaseTime = null;
+    /**
+     * Default request options container.
+     * @private
+     * @type {Object}
+     */
+    this.defaultReqOptions = {
+      bucket: options.bucket || "default",
+      headers: options.headers || {},
+      safe: !!options.safe
+    };
+
+    this._options = options;
+    this._requests = [];
+    this._isBatch = !!options.batch;
+
+    // public properties
+    /**
+     * The remote server base URL.
+     * @type {String}
+     */
+    this.remote = remote;
+    /**
+     * Current server information.
+     * @ignore
+     * @type {Object|null}
+     */
+    this.serverInfo = null;
+    /**
+     * The event emitter instance. Should comply with the `EventEmitter`
+     * interface.
+     * @ignore
+     * @type {EventEmitter}
+     */
+    this.events = options.events || new _events.EventEmitter();
+
+    /**
+     * The HTTP instance.
+     * @ignore
+     * @type {HTTP}
+     */
+    this.http = new _http2.default(this.events, { requestMode: options.requestMode });
+    this._registerHTTPEvents();
+  }
+
+  /**
+   * The remote endpoint base URL. Setting the value will also extract and
+   * validate the version.
+   * @type {String}
+   */
+
+
+  _createClass(KintoClient, [{
+    key: "_registerHTTPEvents",
+
+
+    /**
+     * Registers HTTP events.
+     * @private
+     */
+    value: function _registerHTTPEvents() {
+      var _this = this;
+
+      this.events.on("backoff", function (backoffMs) {
+        _this._backoffReleaseTime = backoffMs;
+      });
+    }
+
+    /**
+     * Retrieve a bucket object to perform operations on it.
+     *
+     * @param  {String}  name    The bucket name.
+     * @param  {Object}  options The request options.
+     * @param  {Boolean} safe    The resulting safe option.
+     * @param  {String}  bucket  The resulting bucket name option.
+     * @param  {Object}  headers The extended headers object option.
+     * @return {Bucket}
+     */
+
+  }, {
+    key: "bucket",
+    value: function bucket(name) {
+      var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+      var bucketOptions = (0, _utils.omit)(this._getRequestOptions(options), "bucket");
+      return new _bucket3.default(this, name, bucketOptions);
+    }
+
+    /**
+     * Generates a request options object, deeply merging the client configured
+     * defaults with the ones provided as argument.
+     *
+     * Note: Headers won't be overriden but merged with instance default ones.
+     *
+     * @private
+     * @param    {Object} options The request options.
+     * @return   {Object}
+     * @property {Boolean} safe    The resulting safe option.
+     * @property {String}  bucket  The resulting bucket name option.
+     * @property {Object}  headers The extended headers object option.
+     */
+
+  }, {
+    key: "_getRequestOptions",
+    value: function _getRequestOptions() {
+      var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+
+      return _extends({}, this.defaultReqOptions, options, {
+        batch: this._isBatch,
+        // Note: headers should never be overriden but extended
+        headers: _extends({}, this.defaultReqOptions.headers, options.headers)
+      });
+    }
+
+    /**
+     * Retrieves server information and persist them locally. This operation is
+     * usually performed a single time during the instance lifecycle.
+     *
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "fetchServerInfo",
+    value: function fetchServerInfo() {
+      var _this2 = this;
+
+      if (this.serverInfo) {
+        return Promise.resolve(this.serverInfo);
+      }
+      return this.http.request(this.remote + (0, _endpoint2.default)("root"), {
+        headers: this.defaultReqOptions.headers
+      }).then(function (_ref) {
+        var json = _ref.json;
+
+        _this2.serverInfo = json;
+        return _this2.serverInfo;
+      });
+    }
+
+    /**
+     * Retrieves Kinto server settings.
+     *
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "fetchServerSettings",
+    value: function fetchServerSettings() {
+      return this.fetchServerInfo().then(function (_ref2) {
+        var settings = _ref2.settings;
+        return settings;
+      });
+    }
+
+    /**
+     * Retrieve server capabilities information.
+     *
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "fetchServerCapabilities",
+    value: function fetchServerCapabilities() {
+      return this.fetchServerInfo().then(function (_ref3) {
+        var capabilities = _ref3.capabilities;
+        return capabilities;
+      });
+    }
+
+    /**
+     * Retrieve authenticated user information.
+     *
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "fetchUser",
+    value: function fetchUser() {
+      return this.fetchServerInfo().then(function (_ref4) {
+        var user = _ref4.user;
+        return user;
+      });
+    }
+
+    /**
+     * Retrieve authenticated user information.
+     *
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "fetchHTTPApiVersion",
+    value: function fetchHTTPApiVersion() {
+      return this.fetchServerInfo().then(function (_ref5) {
+        var http_api_version = _ref5.http_api_version;
+
+        return http_api_version;
+      });
+    }
+
+    /**
+     * Process batch requests, chunking them according to the batch_max_requests
+     * server setting when needed.
+     *
+     * @param  {Array}  requests The list of batch subrequests to perform.
+     * @param  {Object} options  The options object.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "_batchRequests",
+    value: function _batchRequests(requests) {
+      var _this3 = this;
+
+      var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+      var headers = _extends({}, this.defaultReqOptions.headers, options.headers);
+      if (!requests.length) {
+        return Promise.resolve([]);
+      }
+      return this.fetchServerSettings().then(function (serverSettings) {
+        var maxRequests = serverSettings["batch_max_requests"];
+        if (maxRequests && requests.length > maxRequests) {
+          var chunks = (0, _utils.partition)(requests, maxRequests);
+          return (0, _utils.pMap)(chunks, function (chunk) {
+            return _this3._batchRequests(chunk, options);
+          });
+        }
+        return _this3.execute({
+          path: (0, _endpoint2.default)("batch"),
+          method: "POST",
+          headers: headers,
+          body: {
+            defaults: { headers: headers },
+            requests: requests
+          }
+        })
+        // we only care about the responses
+        .then(function (_ref6) {
+          var responses = _ref6.responses;
+          return responses;
+        });
+      });
+    }
+
+    /**
+     * Sends batch requests to the remote server.
+     *
+     * Note: Reserved for internal use only.
+     *
+     * @ignore
+     * @param  {Function} fn      The function to use for describing batch ops.
+     * @param  {Object}   options The options object.
+     * @param  {Boolean}  options.safe      The safe option.
+     * @param  {String}   options.bucket    The bucket name option.
+     * @param  {Object}   options.headers   The headers object option.
+     * @param  {Boolean}  options.aggregate Produces an aggregated result object
+     * (default: `false`).
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "batch",
+    value: function batch(fn) {
+      var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+      var rootBatch = new KintoClient(this.remote, _extends({}, this._options, this._getRequestOptions(options), {
+        batch: true
+      }));
+      var bucketBatch = void 0,
+          collBatch = void 0;
+      if (options.bucket) {
+        bucketBatch = rootBatch.bucket(options.bucket);
+        if (options.collection) {
+          collBatch = bucketBatch.collection(options.collection);
+        }
+      }
+      var batchClient = collBatch || bucketBatch || rootBatch;
+      try {
+        fn(batchClient);
+      } catch (err) {
+        return Promise.reject(err);
+      }
+      return this._batchRequests(rootBatch._requests, options).then(function (responses) {
+        if (options.aggregate) {
+          return (0, _batch.aggregate)(responses, rootBatch._requests);
+        }
+        return responses;
+      });
+    }
+
+    /**
+     * Executes an atomic HTTP request.
+     *
+     * @private
+     * @param  {Object}  request     The request object.
+     * @param  {Object}  options     The options object.
+     * @param  {Boolean} options.raw Resolve with full response object, including
+     * json body and headers (Default: `false`, so only the json body is
+     * retrieved).
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "execute",
+    value: function execute(request) {
+      var _this4 = this;
+
+      var options = arguments.length <= 1 || arguments[1] === undefined ? { raw: false } : arguments[1];
+
+      // If we're within a batch, add the request to the stack to send at once.
+      if (this._isBatch) {
+        this._requests.push(request);
+        // Resolve with a message in case people attempt at consuming the result
+        // from within a batch operation.
+        var msg = "This result is generated from within a batch " + "operation and should not be consumed.";
+        return Promise.resolve(options.raw ? { json: msg } : msg);
+      }
+      var promise = this.fetchServerSettings().then(function (_) {
+        return _this4.http.request(_this4.remote + request.path, _extends({}, request, {
+          body: JSON.stringify(request.body)
+        }));
+      });
+      return options.raw ? promise : promise.then(function (_ref7) {
+        var json = _ref7.json;
+        return json;
+      });
+    }
+
+    /**
+     * Retrieves the list of buckets.
+     *
+     * @param  {Object} options         The options object.
+     * @param  {Object} options.headers The headers object option.
+     * @return {Promise<Object[], Error>}
+     */
+
+  }, {
+    key: "listBuckets",
+    value: function listBuckets() {
+      var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+
+      return this.execute({
+        path: (0, _endpoint2.default)("buckets"),
+        headers: _extends({}, this.defaultReqOptions.headers, options.headers)
+      });
+    }
+
+    /**
+     * Creates a new bucket on the server.
+     *
+     * @param  {String}   bucketName      The bucket name.
+     * @param  {Object}   options         The options object.
+     * @param  {Boolean}  options.safe    The safe option.
+     * @param  {Object}   options.headers The headers object option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "createBucket",
+    value: function createBucket(bucketName) {
+      var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+      var reqOptions = this._getRequestOptions(options);
+      return this.execute(requests.createBucket(bucketName, reqOptions));
+    }
+
+    /**
+     * Deletes a bucket from the server.
+     *
+     * @ignore
+     * @param  {Object|String} bucket          The bucket to delete.
+     * @param  {Object}        options         The options object.
+     * @param  {Boolean}       options.safe    The safe option.
+     * @param  {Object}        options.headers The headers object option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "deleteBucket",
+    value: function deleteBucket(bucket) {
+      var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+      var _bucket = (typeof bucket === "undefined" ? "undefined" : _typeof(bucket)) === "object" ? bucket : { id: bucket };
+      var reqOptions = this._getRequestOptions(options);
+      return this.execute(requests.deleteBucket(_bucket, reqOptions));
+    }
+
+    /**
+     * Deletes all buckets on the server.
+     *
+     * @ignore
+     * @param  {Object}  options         The options object.
+     * @param  {Boolean} options.safe    The safe option.
+     * @param  {Object}  options.headers The headers object option.
+     * @return {Promise<Object, Error>}
+     */
+
+  }, {
+    key: "deleteBuckets",
+    value: function deleteBuckets() {
+      var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+
+      var reqOptions = this._getRequestOptions(options);
+      return this.execute(requests.deleteBuckets(reqOptions));
+    }
+  }, {
+    key: "remote",
+    get: function get() {
+      return this._remote;
+    }
+
+    /**
+     * @ignore
+     */
+    ,
+    set: function set(url) {
+      var version = void 0;
+      try {
+        version = url.match(/\/(v\d+)\/?$/)[1];
+      } catch (err) {
+        throw new Error("The remote URL must contain the version: " + url);
+      }
+      if (version !== SUPPORTED_PROTOCOL_VERSION) {
+        throw new Error("Unsupported protocol version: " + version);
+      }
+      this._remote = url;
+      this._version = version;
+    }
+
+    /**
+     * The current server protocol version, eg. `v1`.
+     * @type {String}
+     */
+
+  }, {
+    key: "version",
+    get: function get() {
+      return this._version;
+    }
+
+    /**
+     * Backoff remaining time, in milliseconds. Defaults to zero if no backoff is
+     * ongoing.
+     *
+     * @type {Number}
+     */
+
+  }, {
+    key: "backoff",
+    get: function get() {
+      var currentTime = new Date().getTime();
+      if (this._backoffReleaseTime && currentTime < this._backoffReleaseTime) {
+        return this._backoffReleaseTime - currentTime;
+      }
+      return 0;
+    }
+  }]);
+
+  return KintoClient;
+}(), (_applyDecoratedDescriptor(_class.prototype, "fetchServerSettings", [_dec], Object.getOwnPropertyDescriptor(_class.prototype, "fetchServerSettings"), _class.prototype), _applyDecoratedDescriptor(_class.prototype, "fetchServerCapabilities", [_dec2], Object.getOwnPropertyDescriptor(_class.prototype, "fetchServerCapabilities"), _class.prototype), _applyDecoratedDescriptor(_class.prototype, "fetchUser", [_dec3], Object.getOwnPropertyDescriptor(_class.prototype, "fetchUser"), _class.prototype), _applyDecoratedDescriptor(_class.prototype, "fetchHTTPApiVersion", [_dec4], Object.getOwnPropertyDescriptor(_class.prototype, "fetchHTTPApiVersion"), _class.prototype), _applyDecoratedDescriptor(_class.prototype, "batch", [_dec5], Object.getOwnPropertyDescriptor(_class.prototype, "batch"), _class.prototype), _applyDecoratedDescriptor(_class.prototype, "deleteBuckets", [_dec6], Object.getOwnPropertyDescriptor(_class.prototype, "deleteBuckets"), _class.prototype)), _class));
+exports.default = KintoClient;
+},{"./batch":13,"./bucket":14,"./endpoint":16,"./http":18,"./requests":20,"./utils":21,"events":5,"isomorphic-fetch":3}],20:[function(require,module,exports){
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+
+var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol ? "symbol" : typeof obj; };
+
+var _extends = Object.assign || function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; };
+
+exports.createBucket = createBucket;
+exports.updateBucket = updateBucket;
+exports.deleteBucket = deleteBucket;
+exports.deleteBuckets = deleteBuckets;
+exports.createCollection = createCollection;
+exports.updateCollection = updateCollection;
+exports.deleteCollection = deleteCollection;
+exports.createRecord = createRecord;
+exports.updateRecord = updateRecord;
+exports.deleteRecord = deleteRecord;
+
+var _endpoint = require("./endpoint");
+
+var _endpoint2 = _interopRequireDefault(_endpoint);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+var requestDefaults = {
+  safe: false,
+  // check if we should set default content type here
+  headers: {},
+  bucket: "default",
+  permissions: {},
+  data: {},
+  patch: false
+};
+
+function safeHeader(safe, last_modified) {
+  if (!safe) {
+    return {};
+  }
+  if (last_modified) {
+    return { "If-Match": "\"" + last_modified + "\"" };
+  }
+  return { "If-None-Match": "*" };
+}
+
+/**
+ * @private
+ */
+function createBucket(bucketName) {
+  var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+  if (!bucketName) {
+    throw new Error("A bucket name is required.");
+  }
+  // Note that we simply ignore any "bucket" option passed here, as the one
+  // we're interested in is the one provided as a required argument.
+
+  var _requestDefaults$opti = _extends({}, requestDefaults, options);
+
+  var headers = _requestDefaults$opti.headers;
+  var permissions = _requestDefaults$opti.permissions;
+  var safe = _requestDefaults$opti.safe;
+
+  return {
+    method: "PUT",
+    path: (0, _endpoint2.default)("bucket", bucketName),
+    headers: _extends({}, headers, safeHeader(safe)),
+    body: {
+      // XXX We can't pass the data option just yet, see Kinto/kinto/issues/239
+      permissions: permissions
+    }
+  };
+}
+
+/**
+ * @private
+ */
+function updateBucket(bucket) {
+  var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+  if ((typeof bucket === "undefined" ? "undefined" : _typeof(bucket)) !== "object") {
+    throw new Error("A bucket object is required.");
+  }
+  if (!bucket.id) {
+    throw new Error("A bucket id is required.");
+  }
+
+  var _requestDefaults$opti2 = _extends({}, requestDefaults, options);
+
+  var headers = _requestDefaults$opti2.headers;
+  var permissions = _requestDefaults$opti2.permissions;
+  var safe = _requestDefaults$opti2.safe;
+  var patch = _requestDefaults$opti2.patch;
+  var last_modified = _requestDefaults$opti2.last_modified;
+
+  return {
+    method: patch ? "PATCH" : "PUT",
+    path: (0, _endpoint2.default)("bucket", bucket.id),
+    headers: _extends({}, headers, safeHeader(safe, last_modified || bucket.last_modified)),
+    body: {
+      data: bucket,
+      permissions: permissions
+    }
+  };
+}
+
+/**
+ * @private
+ */
+function deleteBucket(bucket) {
+  var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+  if ((typeof bucket === "undefined" ? "undefined" : _typeof(bucket)) !== "object") {
+    throw new Error("A bucket object is required.");
+  }
+  if (!bucket.id) {
+    throw new Error("A bucket id is required.");
+  }
+
+  var _requestDefaults$last = _extends({}, requestDefaults, {
+    last_modified: bucket.last_modified
+  }, options);
+
+  var headers = _requestDefaults$last.headers;
+  var safe = _requestDefaults$last.safe;
+  var last_modified = _requestDefaults$last.last_modified;
+
+  if (safe && !last_modified) {
+    throw new Error("Safe concurrency check requires a last_modified value.");
+  }
+  return {
+    method: "DELETE",
+    path: (0, _endpoint2.default)("bucket", bucket.id),
+    headers: _extends({}, headers, safeHeader(safe, last_modified))
+  };
+}
+
+/**
+ * @private
+ */
+function deleteBuckets() {
+  var options = arguments.length <= 0 || arguments[0] === undefined ? {} : arguments[0];
+
+  var _requestDefaults$opti3 = _extends({}, requestDefaults, options);
+
+  var headers = _requestDefaults$opti3.headers;
+  var safe = _requestDefaults$opti3.safe;
+  var last_modified = _requestDefaults$opti3.last_modified;
+
+  if (safe && !last_modified) {
+    throw new Error("Safe concurrency check requires a last_modified value.");
+  }
+  return {
+    method: "DELETE",
+    path: (0, _endpoint2.default)("buckets"),
+    headers: _extends({}, headers, safeHeader(safe, last_modified))
+  };
+}
+
+/**
+ * @private
+ */
+function createCollection(id) {
+  var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+  var _requestDefaults$opti4 = _extends({}, requestDefaults, options);
+
+  var bucket = _requestDefaults$opti4.bucket;
+  var headers = _requestDefaults$opti4.headers;
+  var permissions = _requestDefaults$opti4.permissions;
+  var data = _requestDefaults$opti4.data;
+  var safe = _requestDefaults$opti4.safe;
+  // XXX checks that provided data can't override schema when provided
+
+  var path = id ? (0, _endpoint2.default)("collection", bucket, id) : (0, _endpoint2.default)("collections", bucket);
+  return {
+    method: id ? "PUT" : "POST",
+    path: path,
+    headers: _extends({}, headers, safeHeader(safe)),
+    body: { data: data, permissions: permissions }
+  };
+}
+
+/**
+ * @private
+ */
+function updateCollection(collection) {
+  var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+  if ((typeof collection === "undefined" ? "undefined" : _typeof(collection)) !== "object") {
+    throw new Error("A collection object is required.");
+  }
+  if (!collection.id) {
+    throw new Error("A collection id is required.");
+  }
+
+  var _requestDefaults$opti5 = _extends({}, requestDefaults, options);
+
+  var bucket = _requestDefaults$opti5.bucket;
+  var headers = _requestDefaults$opti5.headers;
+  var permissions = _requestDefaults$opti5.permissions;
+  var schema = _requestDefaults$opti5.schema;
+  var metadata = _requestDefaults$opti5.metadata;
+  var safe = _requestDefaults$opti5.safe;
+  var patch = _requestDefaults$opti5.patch;
+  var last_modified = _requestDefaults$opti5.last_modified;
+
+  var collectionData = _extends({}, metadata, collection);
+  if (options.schema) {
+    collectionData.schema = schema;
+  }
+  return {
+    method: patch ? "PATCH" : "PUT",
+    path: (0, _endpoint2.default)("collection", bucket, collection.id),
+    headers: _extends({}, headers, safeHeader(safe, last_modified || collection.last_modified)),
+    body: {
+      data: collectionData,
+      permissions: permissions
+    }
+  };
+}
+
+/**
+ * @private
+ */
+function deleteCollection(collection) {
+  var options = arguments.length <= 1 || arguments[1] === undefined ? {} : arguments[1];
+
+  if ((typeof collection === "undefined" ? "undefined" : _typeof(collection)) !== "object") {
+    throw new Error("A collection object is required.");
+  }
+  if (!collection.id) {
+    throw new Error("A collection id is required.");
+  }
+
+  var _requestDefaults$last2 = _extends({}, requestDefaults, {
+    last_modified: collection.last_modified
+  }, options);
+
+  var bucket = _requestDefaults$last2.bucket;
+  var headers = _requestDefaults$last2.headers;
+  var safe = _requestDefaults$last2.safe;
+  var last_modified = _requestDefaults$last2.last_modified;
+
+  if (safe && !last_modified) {
+    throw new Error("Safe concurrency check requires a last_modified value.");
+  }
+  return {
+    method: "DELETE",
+    path: (0, _endpoint2.default)("collection", bucket, collection.id),
+    headers: _extends({}, headers, safeHeader(safe, last_modified))
+  };
+}
+
+/**
+ * @private
+ */
+function createRecord(collName, record) {
+  var options = arguments.length <= 2 || arguments[2] === undefined ? {} : arguments[2];
+
+  if (!collName) {
+    throw new Error("A collection name is required.");
+  }
+
+  var _requestDefaults$opti6 = _extends({}, requestDefaults, options);
+
+  var bucket = _requestDefaults$opti6.bucket;
+  var headers = _requestDefaults$opti6.headers;
+  var permissions = _requestDefaults$opti6.permissions;
+  var safe = _requestDefaults$opti6.safe;
+
+  return {
+    // Note: Safe POST using a record id would fail.
+    // see https://github.com/Kinto/kinto/issues/489
+    method: record.id ? "PUT" : "POST",
+    path: record.id ? (0, _endpoint2.default)("record", bucket, collName, record.id) : (0, _endpoint2.default)("records", bucket, collName),
+    headers: _extends({}, headers, safeHeader(safe)),
+    body: {
+      data: record,
+      permissions: permissions
+    }
+  };
+}
+
+/**
+ * @private
+ */
+function updateRecord(collName, record) {
+  var options = arguments.length <= 2 || arguments[2] === undefined ? {} : arguments[2];
+
+  if (!collName) {
+    throw new Error("A collection name is required.");
+  }
+  if (!record.id) {
+    throw new Error("A record id is required.");
+  }
+
+  var _requestDefaults$opti7 = _extends({}, requestDefaults, options);
+
+  var bucket = _requestDefaults$opti7.bucket;
+  var headers = _requestDefaults$opti7.headers;
+  var permissions = _requestDefaults$opti7.permissions;
+  var safe = _requestDefaults$opti7.safe;
+  var patch = _requestDefaults$opti7.patch;
+  var last_modified = _requestDefaults$opti7.last_modified;
+
+  return {
+    method: patch ? "PATCH" : "PUT",
+    path: (0, _endpoint2.default)("record", bucket, collName, record.id),
+    headers: _extends({}, headers, safeHeader(safe, last_modified || record.last_modified)),
+    body: {
+      data: record,
+      permissions: permissions
+    }
+  };
+}
+
+/**
+ * @private
+ */
+function deleteRecord(collName, record) {
+  var options = arguments.length <= 2 || arguments[2] === undefined ? {} : arguments[2];
+
+  if (!collName) {
+    throw new Error("A collection name is required.");
+  }
+  if ((typeof record === "undefined" ? "undefined" : _typeof(record)) !== "object") {
+    throw new Error("A record object is required.");
+  }
+  if (!record.id) {
+    throw new Error("A record id is required.");
+  }
+
+  var _requestDefaults$last3 = _extends({}, requestDefaults, {
+    last_modified: record.last_modified
+  }, options);
+
+  var bucket = _requestDefaults$last3.bucket;
+  var headers = _requestDefaults$last3.headers;
+  var safe = _requestDefaults$last3.safe;
+  var last_modified = _requestDefaults$last3.last_modified;
+
+  if (safe && !last_modified) {
+    throw new Error("Safe concurrency check requires a last_modified value.");
+  }
+  return {
+    method: "DELETE",
+    path: (0, _endpoint2.default)("record", bucket, collName, record.id),
+    headers: _extends({}, headers, safeHeader(safe, last_modified))
+  };
+}
+},{"./endpoint":16}],21:[function(require,module,exports){
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+
+var _slicedToArray = function () { function sliceIterator(arr, i) { var _arr = []; var _n = true; var _d = false; var _e = undefined; try { for (var _i = arr[Symbol.iterator](), _s; !(_n = (_s = _i.next()).done); _n = true) { _arr.push(_s.value); if (i && _arr.length === i) break; } } catch (err) { _d = true; _e = err; } finally { try { if (!_n && _i["return"]) _i["return"](); } finally { if (_d) throw _e; } } return _arr; } return function (arr, i) { if (Array.isArray(arr)) { return arr; } else if (Symbol.iterator in Object(arr)) { return sliceIterator(arr, i); } else { throw new TypeError("Invalid attempt to destructure non-iterable instance"); } }; }();
+
+var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol ? "symbol" : typeof obj; };
+
+exports.partition = partition;
+exports.pMap = pMap;
+exports.omit = omit;
+exports.toDataBody = toDataBody;
+exports.qsify = qsify;
+exports.checkVersion = checkVersion;
+exports.support = support;
+exports.nobatch = nobatch;
+
+var _querystring = require("querystring");
+
+/**
+ * Chunks an array into n pieces.
+ *
+ * @private
+ * @param  {Array}  array
+ * @param  {Number} n
+ * @return {Array}
+ */
+function partition(array, n) {
+  if (n <= 0) {
+    return array;
+  }
+  return array.reduce(function (acc, x, i) {
+    if (i === 0 || i % n === 0) {
+      acc.push([x]);
+    } else {
+      acc[acc.length - 1].push(x);
+    }
+    return acc;
+  }, []);
+}
+
+/**
+ * Maps a list to promises using the provided mapping function, executes them
+ * sequentially then returns a Promise resolving with ordered results obtained.
+ * Think of this as a sequential Promise.all.
+ *
+ * @private
+ * @param  {Array}    list The list to map.
+ * @param  {Function} fn   The mapping function.
+ * @return {Promise}
+ */
+function pMap(list, fn) {
+  var results = [];
+  return list.reduce(function (promise, entry) {
+    return promise.then(function () {
+      return Promise.resolve(fn(entry)).then(function (result) {
+        return results = results.concat(result);
+      });
+    });
+  }, Promise.resolve()).then(function () {
+    return results;
+  });
+}
+
+/**
+ * Takes an object and returns a copy of it with the provided keys omitted.
+ *
+ * @private
+ * @param  {Object}    obj  The source object.
+ * @param  {...String} keys The keys to omit.
+ * @return {Object}
+ */
+function omit(obj) {
+  for (var _len = arguments.length, keys = Array(_len > 1 ? _len - 1 : 0), _key = 1; _key < _len; _key++) {
+    keys[_key - 1] = arguments[_key];
+  }
+
+  return Object.keys(obj).reduce(function (acc, key) {
+    if (keys.indexOf(key) === -1) {
+      acc[key] = obj[key];
+    }
+    return acc;
+  }, {});
+}
+
+/**
+ * Always returns a resource data object from the provided argument.
+ *
+ * @private
+ * @param  {Object|String} value
+ * @return {Object}
+ */
+function toDataBody(value) {
+  if ((typeof value === "undefined" ? "undefined" : _typeof(value)) === "object") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return { id: value };
+  }
+  throw new Error("Invalid collection argument.");
+}
+
+/**
+ * Transforms an object into an URL query string, stripping out any undefined
+ * values.
+ *
+ * @param  {Object} obj
+ * @return {String}
+ */
+function qsify(obj) {
+  return (0, _querystring.stringify)(JSON.parse(JSON.stringify(obj)));
+}
+
+/**
+ * Checks if a version is within the provided range.
+ *
+ * @param  {String} version    The version to check.
+ * @param  {String} minVersion The minimum supported version (inclusive).
+ * @param  {String} maxVersion The minimum supported version (exclusive).
+ * @throws {Error} If the version is outside of the provided range.
+ */
+function checkVersion(version, minVersion, maxVersion) {
+  var extract = function extract(str) {
+    return str.split(".").map(function (x) {
+      return parseInt(x, 10);
+    });
+  };
+
+  var _extract = extract(version);
+
+  var _extract2 = _slicedToArray(_extract, 2);
+
+  var verMajor = _extract2[0];
+  var verMinor = _extract2[1];
+
+  var _extract3 = extract(minVersion);
+
+  var _extract4 = _slicedToArray(_extract3, 2);
+
+  var minMajor = _extract4[0];
+  var minMinor = _extract4[1];
+
+  var _extract5 = extract(maxVersion);
+
+  var _extract6 = _slicedToArray(_extract5, 2);
+
+  var maxMajor = _extract6[0];
+  var maxMinor = _extract6[1];
+
+  var checks = [verMajor < minMajor, verMajor === minMajor && verMinor < minMinor, verMajor > maxMajor, verMajor === maxMajor && verMinor >= maxMinor];
+  if (checks.some(function (x) {
+    return x;
+  })) {
+    throw new Error("Version " + version + " doesn't satisfy " + (minVersion + " <= x < " + maxVersion));
+  }
+}
+
+/**
+ * Generates a decorator function ensuring a version check is performed against
+ * the provided requirements before executing it.
+ *
+ * @param  {String} min The required min version (inclusive).
+ * @param  {String} max The required max version (inclusive).
+ * @return {Function}
+ */
+function support(min, max) {
+  return function (target, key, descriptor) {
+    var fn = descriptor.value;
+    return {
+      configurable: true,
+      get: function get() {
+        var _this = this;
+
+        var wrappedMethod = function wrappedMethod() {
+          for (var _len2 = arguments.length, args = Array(_len2), _key2 = 0; _key2 < _len2; _key2++) {
+            args[_key2] = arguments[_key2];
+          }
+
+          // "this" is the current instance which its method is decorated.
+          var client = "client" in _this ? _this.client : _this;
+          return client.fetchHTTPApiVersion().then(function (version) {
+            return checkVersion(version, min, max);
+          }).then(Promise.resolve(fn.apply(_this, args)));
+        };
+        Object.defineProperty(this, key, {
+          value: wrappedMethod,
+          configurable: true,
+          writable: true
+        });
+        return wrappedMethod;
+      }
+    };
+  };
+}
+
+/**
+ * Generates a decorator function ensuring an operation is not performed from
+ * within a batch request.
+ *
+ * @param  {String} message The error message to throw.
+ * @return {Function}
+ */
+function nobatch(message) {
+  return function (target, key, descriptor) {
+    var fn = descriptor.value;
+    return {
+      configurable: true,
+      get: function get() {
+        var _this2 = this;
+
+        var wrappedMethod = function wrappedMethod() {
+          for (var _len3 = arguments.length, args = Array(_len3), _key3 = 0; _key3 < _len3; _key3++) {
+            args[_key3] = arguments[_key3];
+          }
+
+          // "this" is the current instance which its method is decorated.
+          if (_this2._isBatch) {
+            throw new Error(message);
+          }
+          return fn.apply(_this2, args);
+        };
+        Object.defineProperty(this, key, {
+          value: wrappedMethod,
+          configurable: true,
+          writable: true
+        });
+        return wrappedMethod;
+      }
+    };
+  };
+}
+},{"querystring":10}],22:[function(require,module,exports){
 (function (global){
 
 var rng;
@@ -1584,7 +4233,7 @@ module.exports = rng;
 
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],9:[function(require,module,exports){
+},{}],23:[function(require,module,exports){
 //     uuid.js
 //
 //     Copyright (c) 2010-2012 Robert Kieffer
@@ -1769,16 +4418,16 @@ uuid.unparse = unparse;
 
 module.exports = uuid;
 
-},{"./rng":8}],10:[function(require,module,exports){
+},{"./rng":22}],24:[function(require,module,exports){
 "use strict";
 
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
 
-var _api = require("./api");
+var _kintoClient = require("kinto-client");
 
-var _api2 = _interopRequireDefault(_api);
+var _kintoClient2 = _interopRequireDefault(_kintoClient);
 
 var _collection = require("./collection");
 
@@ -1847,7 +4496,7 @@ class KintoBase {
     }
 
     const { remote, events, headers, requestMode } = this._options;
-    this._api = new _api2.default(remote, events, { headers, requestMode });
+    this._api = new _kintoClient2.default(remote, { events, headers, requestMode });
 
     // public properties
     /**
@@ -1877,13 +4526,14 @@ class KintoBase {
       adapter: this._options.adapter,
       dbPrefix: this._options.dbPrefix,
       idSchema: options.idSchema,
-      remoteTransformers: options.remoteTransformers
+      remoteTransformers: options.remoteTransformers,
+      hooks: options.hooks
     });
   }
 }
 exports.default = KintoBase;
 
-},{"./adapters/base":11,"./api":12,"./collection":13}],11:[function(require,module,exports){
+},{"./adapters/base":25,"./collection":26,"kinto-client":19}],25:[function(require,module,exports){
 "use strict";
 
 /**
@@ -1953,9 +4603,10 @@ class BaseAdapter {
    * Lists all records from the database.
    *
    * @abstract
+   * @param  {Object} params  The filters and order to apply to the results.
    * @return {Promise}
    */
-  list() {
+  list(params = { filters: {}, order: "" }) {
     throw new Error("Not Implemented.");
   }
 
@@ -1992,29 +4643,27 @@ class BaseAdapter {
 }
 exports.default = BaseAdapter;
 
-},{}],12:[function(require,module,exports){
+},{}],26:[function(require,module,exports){
 "use strict";
 
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
-exports.SUPPORTED_PROTOCOL_VERSION = undefined;
+exports.SyncResultObject = undefined;
 exports.cleanRecord = cleanRecord;
 
-var _utils = require("./utils.js");
+var _base = require("./adapters/base");
 
-var _http = require("./http.js");
+var _base2 = _interopRequireDefault(_base);
 
-var _http2 = _interopRequireDefault(_http);
+var _utils = require("./utils");
+
+var _uuid = require("uuid");
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
 const RECORD_FIELDS_TO_CLEAN = ["_status", "last_modified"];
-/**
- * Currently supported protocol version.
- * @type {String}
- */
-const SUPPORTED_PROTOCOL_VERSION = exports.SUPPORTED_PROTOCOL_VERSION = "v1";
+const AVAILABLE_HOOKS = ["incoming-changes"];
 
 /**
  * Cleans a record object, excluding passed keys.
@@ -2031,331 +4680,6 @@ function cleanRecord(record, excludeFields = RECORD_FIELDS_TO_CLEAN) {
     return acc;
   }, {});
 }
-
-/**
- * High level HTTP client for the Kinto API.
- */
-class Api {
-  /**
-   * Constructor.
-   *
-   * Options:
-   * - {Object} headers      The key-value headers to pass to each request.
-   * - {String} requestMode  The HTTP request mode.
-   *
-   * @param  {String}       remote  The remote URL.
-   * @param  {EventEmitter} events  The events handler
-   * @param  {Object}       options The options object.
-   */
-  constructor(remote, events, options = {}) {
-    if (typeof remote !== "string" || !remote.length) {
-      throw new Error("Invalid remote URL: " + remote);
-    }
-    if (remote[remote.length - 1] === "/") {
-      remote = remote.slice(0, -1);
-    }
-    this._backoffReleaseTime = null;
-    this.remote = remote;
-
-    // public properties
-    /**
-     * The optional generic headers.
-     * @type {Object}
-     */
-    this.optionHeaders = options.headers || {};
-    /**
-     * Current server settings, retrieved from the server.
-     * @type {Object}
-     */
-    this.serverSettings = null;
-    /**
-     * The even emitter instance.
-     * @type {EventEmitter}
-     */
-    if (!events) {
-      throw new Error("No events handler provided");
-    }
-    this.events = events;
-
-    /**
-     * The HTTP instance.
-     * @type {HTTP}
-     */
-    this.http = new _http2.default(this.events, { requestMode: options.requestMode });
-    this._registerHTTPEvents();
-  }
-
-  /**
-   * The remote endpoint base URL. Setting the value will also extract and
-   * validate the version.
-   * @type {String}
-   */
-  get remote() {
-    return this._remote;
-  }
-
-  set remote(url) {
-    let version;
-    try {
-      version = url.match(/\/(v\d+)\/?$/)[1];
-    } catch (err) {
-      throw new Error("The remote URL must contain the version: " + url);
-    }
-    if (version !== SUPPORTED_PROTOCOL_VERSION) {
-      throw new Error(`Unsupported protocol version: ${ version }`);
-    }
-    this._remote = url;
-    this._version = version;
-  }
-
-  /**
-   * The current server protocol version, eg. `v1`.
-   * @type {String}
-   */
-  get version() {
-    return this._version;
-  }
-
-  /**
-   * Backoff remaining time, in milliseconds. Defaults to zero if no backoff is
-   * ongoing.
-   *
-   * @return {Number}
-   */
-  get backoff() {
-    const currentTime = new Date().getTime();
-    if (this._backoffReleaseTime && currentTime < this._backoffReleaseTime) {
-      return this._backoffReleaseTime - currentTime;
-    }
-    return 0;
-  }
-
-  /**
-   * Registers HTTP events.
-   */
-  _registerHTTPEvents() {
-    this.events.on("backoff", backoffMs => {
-      this._backoffReleaseTime = backoffMs;
-    });
-  }
-
-  /**
-   * Retrieves available server enpoints.
-   *
-   * Options:
-   * - {Boolean} fullUrl: Retrieve a fully qualified URL (default: true).
-   *
-   * @param  {Object} options Options object.
-   * @return {String}
-   */
-  endpoints(options = { fullUrl: true }) {
-    const root = options.fullUrl ? this.remote : `/${ this.version }`;
-    const urls = {
-      root: () => `${ root }/`,
-      batch: () => `${ root }/batch`,
-      bucket: bucket => `${ root }/buckets/${ bucket }`,
-      collection: (bucket, coll) => `${ urls.bucket(bucket) }/collections/${ coll }`,
-      records: (bucket, coll) => `${ urls.collection(bucket, coll) }/records`,
-      record: (bucket, coll, id) => `${ urls.records(bucket, coll) }/${ id }`
-    };
-    return urls;
-  }
-
-  /**
-   * Retrieves Kinto server settings.
-   *
-   * @return {Promise}
-   */
-  fetchServerSettings() {
-    if (this.serverSettings) {
-      return Promise.resolve(this.serverSettings);
-    }
-    return this.http.request(this.endpoints().root()).then(res => {
-      this.serverSettings = res.json.settings;
-      return this.serverSettings;
-    });
-  }
-
-  /**
-   * Fetches latest changes from the remote server.
-   *
-   * @param  {String} bucketName  The bucket name.
-   * @param  {String} collName    The collection name.
-   * @param  {Object} options     The options object.
-   * @return {Promise}
-   */
-  fetchChangesSince(bucketName, collName, options = { lastModified: null, headers: {} }) {
-    const recordsUrl = this.endpoints().records(bucketName, collName);
-    let queryString = "";
-    const headers = Object.assign({}, this.optionHeaders, options.headers);
-
-    if (options.lastModified) {
-      queryString = "?_since=" + options.lastModified;
-      headers["If-None-Match"] = (0, _utils.quote)(options.lastModified);
-    }
-
-    return this.fetchServerSettings().then(_ => this.http.request(recordsUrl + queryString, { headers })).then(res => {
-      // If HTTP 304, nothing has changed
-      if (res.status === 304) {
-        return {
-          lastModified: options.lastModified,
-          changes: []
-        };
-      }
-      // XXX: ETag are supposed to be opaque and stored «as-is».
-      // Extract response data
-      let etag = res.headers.get("ETag"); // e.g. '"42"'
-      etag = etag ? parseInt((0, _utils.unquote)(etag), 10) : options.lastModified;
-      const records = res.json.data;
-
-      // Check if server was flushed
-      const localSynced = options.lastModified;
-      const serverChanged = etag > options.lastModified;
-      const emptyCollection = records ? records.length === 0 : true;
-      if (localSynced && serverChanged && emptyCollection) {
-        throw Error("Server has been flushed.");
-      }
-
-      return { lastModified: etag, changes: records };
-    });
-  }
-
-  /**
-   * Builds an individual record batch request body.
-   *
-   * @param  {Object}  record The record object.
-   * @param  {String}  path   The record endpoint URL.
-   * @param  {Boolean} safe   Safe update?
-   * @return {Object}         The request body object.
-   */
-  _buildRecordBatchRequest(record, path, safe) {
-    const isDeletion = record._status === "deleted";
-    const method = isDeletion ? "DELETE" : "PUT";
-    const body = isDeletion ? undefined : { data: cleanRecord(record) };
-    const headers = {};
-    if (safe) {
-      if (record.last_modified) {
-        // Safe replace.
-        headers["If-Match"] = (0, _utils.quote)(record.last_modified);
-      } else if (!isDeletion) {
-        // Safe creation.
-        headers["If-None-Match"] = "*";
-      }
-    }
-    return { method, headers, path, body };
-  }
-
-  /**
-   * Process a batch request response.
-   *
-   * @param  {Object}  results          The results object.
-   * @param  {Array}   records          The initial records list.
-   * @param  {Object}  response         The response HTTP object.
-   * @return {Promise}
-   */
-  _processBatchResponses(results, records, response) {
-    // Handle individual batch subrequests responses
-    response.json.responses.forEach((response, index) => {
-      // TODO: handle 409 when unicity rule is violated (ex. POST with
-      // existing id, unique field, etc.)
-      if (response.status && response.status >= 200 && response.status < 400) {
-        results.published.push(response.body.data);
-      } else if (response.status === 404) {
-        results.skipped.push(records[index]);
-      } else if (response.status === 412) {
-        results.conflicts.push({
-          type: "outgoing",
-          local: records[index],
-          remote: response.body.details && response.body.details.existing || null
-        });
-      } else {
-        results.errors.push({
-          path: response.path,
-          sent: records[index],
-          error: response.body
-        });
-      }
-    });
-    return results;
-  }
-
-  /**
-   * Sends batch update requests to the remote server.
-   *
-   * Options:
-   * - {Object}  headers  Headers to attach to main and all subrequests.
-   * - {Boolean} safe     Safe update (default: `true`)
-   *
-   * @param  {String} bucketName  The bucket name.
-   * @param  {String} collName    The collection name.
-   * @param  {Array}  records     The list of record updates to send.
-   * @param  {Object} options     The options object.
-   * @return {Promise}
-   */
-  batch(bucketName, collName, records, options = { headers: {} }) {
-    const safe = options.safe || true;
-    const headers = Object.assign({}, this.optionHeaders, options.headers);
-    const results = {
-      errors: [],
-      published: [],
-      conflicts: [],
-      skipped: []
-    };
-    if (!records.length) {
-      return Promise.resolve(results);
-    }
-    return this.fetchServerSettings().then(serverSettings => {
-      // Kinto 1.6.1 possibly exposes multiple setting prefixes
-      const maxRequests = serverSettings["batch_max_requests"] || serverSettings["cliquet.batch_max_requests"];
-      if (maxRequests && records.length > maxRequests) {
-        return Promise.all((0, _utils.partition)(records, maxRequests).map(chunk => {
-          return this.batch(bucketName, collName, chunk, options);
-        })).then(batchResults => {
-          // Assemble responses of chunked batch results into one single
-          // result object
-          return batchResults.reduce((acc, batchResult) => {
-            Object.keys(batchResult).forEach(key => {
-              acc[key] = results[key].concat(batchResult[key]);
-            });
-            return acc;
-          }, results);
-        });
-      }
-      return this.http.request(this.endpoints().batch(), {
-        method: "POST",
-        headers: headers,
-        body: JSON.stringify({
-          defaults: { headers },
-          requests: records.map(record => {
-            const path = this.endpoints({ full: false }).record(bucketName, collName, record.id);
-            return this._buildRecordBatchRequest(record, path, safe);
-          })
-        })
-      }).then(res => this._processBatchResponses(results, records, res));
-    });
-  }
-}
-exports.default = Api;
-
-},{"./http.js":15,"./utils.js":16}],13:[function(require,module,exports){
-"use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-exports.SyncResultObject = undefined;
-
-var _base = require("./adapters/base");
-
-var _base2 = _interopRequireDefault(_base);
-
-var _utils = require("./utils");
-
-var _api = require("./api");
-
-var _uuid = require("uuid");
-
-function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
 /**
  * Synchronization result object.
@@ -2466,7 +4790,7 @@ function importChange(transaction, remote) {
     transaction.create(synced);
     return { type: "created", data: synced };
   }
-  const identical = (0, _utils.deepEquals)((0, _api.cleanRecord)(local), (0, _api.cleanRecord)(remote));
+  const identical = (0, _utils.deepEquals)(cleanRecord(local), cleanRecord(remote));
   if (local._status !== "synced") {
     // Locally deleted, unsynced: scheduled for remote deletion.
     if (local._status === "deleted") {
@@ -2478,7 +4802,7 @@ function importChange(transaction, remote) {
       // status to "synced".
       const synced = markSynced(remote);
       transaction.update(synced);
-      return { type: "updated", data: synced };
+      return { type: "updated", data: synced, previous: local };
     }
     return {
       type: "conflicts",
@@ -2535,9 +4859,10 @@ class Collection {
     this.db = db;
     /**
      * The Api instance.
-     * @type {Api}
+     * @type {KintoClient}
      */
     this.api = api;
+    this._apiCollection = this.api.bucket(this.bucket).collection(this.name);
     /**
      * The event emitter instance.
      * @type {EventEmitter}
@@ -2553,6 +4878,11 @@ class Collection {
      * @type {Array}
      */
     this.remoteTransformers = this._validateRemoteTransformers(options.remoteTransformers);
+    /**
+     * The list of hooks.
+     * @type {Object}
+     */
+    this.hooks = this._validateHooks(options.hooks);
   }
 
   /**
@@ -2639,6 +4969,52 @@ class Collection {
       }
       return transformer;
     });
+  }
+
+  /**
+   * Validate the passed hook is correct.
+   *
+   * @param {Array|undefined} hook.
+   * @return {Array}
+   **/
+  _validateHook(hook) {
+    if (!Array.isArray(hook)) {
+      throw new Error("A hook definition should be an array of functions.");
+    }
+    return hook.map(fn => {
+      if (typeof fn !== "function") {
+        throw new Error("A hook definition should be an array of functions.");
+      }
+      return fn;
+    });
+  }
+
+  /**
+   * Validates a list of hooks.
+   *
+   * @param  {Object|undefined} hooks
+   * @return {Object}
+   */
+  _validateHooks(hooks) {
+    if (typeof hooks === "undefined") {
+      return {};
+    }
+    if (Array.isArray(hooks)) {
+      throw new Error("hooks should be an object, not an array.");
+    }
+    if (typeof hooks !== "object") {
+      throw new Error("hooks should be an object.");
+    }
+
+    const validatedHooks = {};
+
+    for (let hook in hooks) {
+      if (AVAILABLE_HOOKS.indexOf(hook) === -1) {
+        throw new Error("The hook should be one of " + AVAILABLE_HOOKS.join(", "));
+      }
+      validatedHooks[hook] = this._validateHook(hooks[hook]);
+    }
+    return validatedHooks;
   }
 
   /**
@@ -2754,12 +5130,7 @@ class Collection {
     }
     return this.get(record.id).then(res => {
       const existing = res.data;
-      let newStatus = "updated";
-      if (record._status === "deleted") {
-        newStatus = "deleted";
-      } else if (options.synced) {
-        newStatus = "synced";
-      }
+      const newStatus = options.synced ? "synced" : "updated";
       return this.db.execute(transaction => {
         const source = options.patch ? Object.assign({}, existing, record) : record;
         const updated = markStatus(source, newStatus);
@@ -2827,7 +5198,7 @@ class Collection {
    * Lists records from the local database.
    *
    * Params:
-   * - {Object} filters The filters to apply (default: `{}`).
+   * - {Object} filters Filter the results (default: `{}`).
    * - {String} order   The order to apply   (default: `-last_modified`).
    *
    * Options:
@@ -2839,12 +5210,12 @@ class Collection {
    */
   list(params = {}, options = { includeDeleted: false }) {
     params = Object.assign({ order: "-last_modified", filters: {} }, params);
-    return this.db.list().then(results => {
-      let reduced = (0, _utils.reduceRecords)(params.filters, params.order, results);
+    return this.db.list(params).then(results => {
+      let data = results;
       if (!options.includeDeleted) {
-        reduced = reduced.filter(record => record._status !== "deleted");
+        data = results.filter(record => record._status !== "deleted");
       }
-      return { data: reduced, permissions: {} };
+      return { data, permissions: {} };
     });
   }
 
@@ -2862,51 +5233,32 @@ class Collection {
       }
       return this._decodeRecord("remote", change);
     })).then(decodedChanges => {
-      // XXX: list() should filter only ids in changes.
-      return this.list({ order: "" }, { includeDeleted: true }).then(res => {
-        return { decodedChanges, existingRecords: res.data };
-      });
-    }).then(({ decodedChanges, existingRecords }) => {
-      return this.db.execute(transaction => {
-        return decodedChanges.map(remote => {
-          // Store remote change into local database.
-          return importChange(transaction, remote);
-        });
-      }, { preload: existingRecords });
-    }).catch(err => {
-      // XXX todo
-      err.type = "incoming";
-      // XXX one error of the whole transaction instead of one per atomic op
-      return [{ type: "errors", data: err }];
-    }).then(imports => {
-      var _iteratorNormalCompletion = true;
-      var _didIteratorError = false;
-      var _iteratorError = undefined;
-
-      try {
-        for (var _iterator = imports[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
-          const imported = _step.value;
-
+      // No change, nothing to import.
+      if (decodedChanges.length === 0) {
+        return Promise.resolve(syncResultObject);
+      }
+      // Retrieve records matching change ids.
+      const remoteIds = decodedChanges.map(change => change.id);
+      return this.list({ filters: { id: remoteIds }, order: "" }, { includeDeleted: true }).then(res => ({ decodedChanges, existingRecords: res.data })).then(({ decodedChanges, existingRecords }) => {
+        return this.db.execute(transaction => {
+          return decodedChanges.map(remote => {
+            // Store remote change into local database.
+            return importChange(transaction, remote);
+          });
+        }, { preload: existingRecords });
+      }).catch(err => {
+        // XXX todo
+        err.type = "incoming";
+        // XXX one error of the whole transaction instead of per atomic op
+        return [{ type: "errors", data: err }];
+      }).then(imports => {
+        for (let imported of imports) {
           if (imported.type !== "void") {
             syncResultObject.add(imported.type, imported.data);
           }
         }
-      } catch (err) {
-        _didIteratorError = true;
-        _iteratorError = err;
-      } finally {
-        try {
-          if (!_iteratorNormalCompletion && _iterator.return) {
-            _iterator.return();
-          }
-        } finally {
-          if (_didIteratorError) {
-            throw _iteratorError;
-          }
-        }
-      }
-
-      return syncResultObject;
+        return syncResultObject;
+      });
     }).then(syncResultObject => {
       syncResultObject.lastModified = changeObject.lastModified;
       // Don't persist lastModified value if any conflict or error occured
@@ -2925,24 +5277,23 @@ class Collection {
    * Resets the local records as if they were never synced; existing records are
    * marked as newly created, deleted records are dropped.
    *
-   * A next call to {@link Collection.sync} will thus republish the whole content of the
-   * local collection to the server.
+   * A next call to {@link Collection.sync} will thus republish the whole
+   * content of the local collection to the server.
    *
    * @return {Promise} Resolves with the number of processed records.
    */
   resetSyncStatus() {
     let _count;
-    // XXX filter by status
-    return this.list({}, { includeDeleted: true }).then(result => {
+    return this.list({ filters: { _status: ["deleted", "synced"] }, order: "" }, { includeDeleted: true }).then(unsynced => {
       return this.db.execute(transaction => {
-        _count = result.data.length;
-        result.data.forEach(r => {
-          // Garbage collect deleted records.
-          if (r._status === "deleted") {
-            transaction.delete(r.id);
+        _count = unsynced.data.length;
+        unsynced.data.forEach(record => {
+          if (record._status === "deleted") {
+            // Garbage collect deleted records.
+            transaction.delete(record.id);
           } else {
             // Records that were synced become «created».
-            transaction.update(Object.assign({}, r, {
+            transaction.update(Object.assign({}, record, {
               last_modified: undefined,
               _status: "created"
             }));
@@ -2962,20 +5313,10 @@ class Collection {
    */
   gatherLocalChanges() {
     let _toDelete;
-    // XXX filter by status
-    return this.list({}, { includeDeleted: true }).then(res => {
-      return res.data.reduce((acc, record) => {
-        if (record._status === "deleted" && !record.last_modified) {
-          acc.toDelete.push(record);
-        } else if (record._status !== "synced") {
-          acc.toSync.push(record);
-        }
-        return acc;
-        // rename toSync to toPush or toPublish
-      }, { toDelete: [], toSync: [] });
-    }).then(({ toDelete, toSync }) => {
-      _toDelete = toDelete;
-      return Promise.all(toSync.map(this._encodeRecord.bind(this, "remote")));
+    return Promise.all([this.list({ filters: { _status: ["created", "updated"] }, order: "" }), this.list({ filters: { _status: "deleted" }, order: "" }, { includeDeleted: true })]).then(([unsynced, deleted]) => {
+      _toDelete = deleted.data;
+      // Encode unsynced records.
+      return Promise.all(unsynced.data.map(this._encodeRecord.bind(this, "remote")));
     }).then(toSync => ({ toDelete: _toDelete, toSync }));
   }
 
@@ -3001,14 +5342,41 @@ class Collection {
       headers: {}
     }, options);
     // First fetch remote changes from the server
-    return this.api.fetchChangesSince(this.bucket, this.name, {
-      lastModified: options.lastModified,
+    return this._apiCollection.listRecords({
+      since: options.lastModified || undefined,
       headers: options.headers
+    }).then(({ data, last_modified }) => {
+      // last_modified is the ETag header value (string).
+      // For retro-compatibility with first kinto.js versions
+      // parse it to integer.
+      const unquoted = last_modified ? parseInt(last_modified.replace(/"/g, ""), 10) : undefined;
+
+      // Check if server was flushed.
+      // This is relevant for the Kinto demo server
+      // (and thus for many new comers).
+      const localSynced = options.lastModified;
+      const serverChanged = unquoted > options.lastModified;
+      const emptyCollection = data.length === 0;
+      if (localSynced && serverChanged && emptyCollection) {
+        throw Error("Server has been flushed.");
+      }
+
+      const payload = { lastModified: unquoted, changes: data };
+      return this.applyHook("incoming-changes", payload);
     })
     // Reflect these changes locally
     .then(changes => this.importChanges(syncResultObject, changes))
     // Handle conflicts, if any
     .then(result => this._handleConflicts(result, options.strategy));
+  }
+
+  applyHook(hookName, payload) {
+    if (typeof this.hooks[hookName] == "undefined") {
+      return Promise.resolve(payload);
+    }
+    return (0, _utils.waterfall)(this.hooks[hookName].map(hook => {
+      return record => hook(payload, this);
+    }), payload);
   }
 
   /**
@@ -3028,30 +5396,52 @@ class Collection {
 
     // Fetch local changes
     return this.gatherLocalChanges().then(({ toDelete, toSync }) => {
-      return Promise.all([
-      // Delete never synced records marked for deletion
-      this.db.execute(transaction => {
-        toDelete.forEach(record => {
-          transaction.delete(record.id);
-        });
-      }),
       // Send batch update requests
-      this.api.batch(this.bucket, this.name, toSync, options)]);
+      return this._apiCollection.batch(batch => {
+        toDelete.forEach(r => {
+          // never published locally deleted records should not be pusblished
+          if (r.last_modified) {
+            batch.deleteRecord(r);
+          }
+        });
+        toSync.forEach(r => {
+          const isCreated = r._status === "created";
+          // Do not store status on server.
+          // XXX: cleanRecord() removes last_modified, required by safe.
+          delete r._status;
+          if (isCreated) {
+            batch.createRecord(r);
+          } else {
+            batch.updateRecord(r);
+          }
+        });
+      }, { headers: options.headers, safe: true, aggregate: true });
     })
     // Update published local records
-    .then(([deleted, synced]) => {
-      const { errors, conflicts, published, skipped } = synced;
+    .then(synced => {
       // Merge outgoing errors into sync result object
-      syncResultObject.add("errors", errors.map(error => {
+      syncResultObject.add("errors", synced.errors.map(error => {
         error.type = "outgoing";
         return error;
       }));
+
+      // The result of a batch returns data and permissions.
+      // XXX: permissions are ignored currently.
+      const conflicts = synced.conflicts.map(c => {
+        return { type: c.type, local: c.local.data, remote: c.remote };
+      });
+      const published = synced.published.map(c => c.data);
+      const skipped = synced.skipped.map(c => c.data);
+
       // Merge outgoing conflicts into sync result object
       syncResultObject.add("conflicts", conflicts);
       // Reflect publication results locally
       const missingRemotely = skipped.map(r => Object.assign({}, r, { deleted: true }));
       const toApplyLocally = published.concat(missingRemotely);
       // Deleted records are distributed accross local and missing records
+      // XXX: When tackling the issue to avoid downloading our own changes
+      // from the server. `toDeleteLocally` should be obtained from local db.
+      // See https://github.com/Kinto/kinto.js/issues/144
       const toDeleteLocally = toApplyLocally.filter(r => r.deleted);
       const toUpdateLocally = toApplyLocally.filter(r => !r.deleted);
       // First, apply the decode transformers, if any
@@ -3166,7 +5556,7 @@ class Collection {
     }
     if (!options.ignoreBackoff && this.api.backoff > 0) {
       const seconds = Math.ceil(this.api.backoff / 1000);
-      return Promise.reject(new Error(`Server is backed off; retry in ${ seconds }s or use the ignoreBackoff option.`));
+      return Promise.reject(new Error(`Server is asking clients to back off; retry in ${ seconds }s or use the ignoreBackoff option.`));
     }
     const result = new SyncResultObject();
     const syncPromise = this.db.getLastModified().then(lastModified => this._lastModified = lastModified).then(_ => this.pullChanges(result, options)).then(result => this.pushChanges(result, options)).then(result => {
@@ -3195,41 +5585,20 @@ class Collection {
       return reject("Records is not an array.");
     }
 
-    var _iteratorNormalCompletion2 = true;
-    var _didIteratorError2 = false;
-    var _iteratorError2 = undefined;
-
-    try {
-      for (var _iterator2 = records[Symbol.iterator](), _step2; !(_iteratorNormalCompletion2 = (_step2 = _iterator2.next()).done); _iteratorNormalCompletion2 = true) {
-        const record = _step2.value;
-
-        if (!record.id || !this.idSchema.validate(record.id)) {
-          return reject("Record has invalid ID: " + JSON.stringify(record));
-        }
-
-        if (!record.last_modified) {
-          return reject("Record has no last_modified value: " + JSON.stringify(record));
-        }
+    for (let record of records) {
+      if (!record.id || !this.idSchema.validate(record.id)) {
+        return reject("Record has invalid ID: " + JSON.stringify(record));
       }
 
-      // Fetch all existing records from local database,
-      // and skip those who are newer or not marked as synced.
-
-      // XXX filter by status / ids in records
-    } catch (err) {
-      _didIteratorError2 = true;
-      _iteratorError2 = err;
-    } finally {
-      try {
-        if (!_iteratorNormalCompletion2 && _iterator2.return) {
-          _iterator2.return();
-        }
-      } finally {
-        if (_didIteratorError2) {
-          throw _iteratorError2;
-        }
+      if (!record.last_modified) {
+        return reject("Record has no last_modified value: " + JSON.stringify(record));
       }
     }
+
+    // Fetch all existing records from local database,
+    // and skip those who are newer or not marked as synced.
+
+    // XXX filter by status / ids in records
 
     return this.list({}, { includeDeleted: true }).then(res => {
       return res.data.reduce((acc, record) => {
@@ -3255,232 +5624,16 @@ class Collection {
 }
 exports.default = Collection;
 
-},{"./adapters/base":11,"./api":12,"./utils":16,"uuid":9}],14:[function(require,module,exports){
-"use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-/**
- * Kinto server error code descriptors.
- * @type {Object}
- */
-exports.default = {
-  104: "Missing Authorization Token",
-  105: "Invalid Authorization Token",
-  106: "Request body was not valid JSON",
-  107: "Invalid request parameter",
-  108: "Missing request parameter",
-  109: "Invalid posted data",
-  110: "Invalid Token / id",
-  111: "Missing Token / id",
-  112: "Content-Length header was not provided",
-  113: "Request body too large",
-  114: "Resource was modified meanwhile",
-  115: "Method not allowed on this end point",
-  116: "Requested version not available on this server",
-  117: "Client has sent too many requests",
-  121: "Resource access is forbidden for this user",
-  122: "Another resource violates constraint",
-  201: "Service Temporary unavailable due to high load",
-  202: "Service deprecated",
-  999: "Internal Server Error"
-};
-
-},{}],15:[function(require,module,exports){
-"use strict";
-
-Object.defineProperty(exports, "__esModule", {
-  value: true
-});
-
-var _errors = require("./errors.js");
-
-var _errors2 = _interopRequireDefault(_errors);
-
-function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
-
-/**
- * Enhanced HTTP client for the Kinto protocol.
- */
-class HTTP {
-  /**
-   * Default HTTP request headers applied to each outgoing request.
-   *
-   * @type {Object}
-   */
-  static get DEFAULT_REQUEST_HEADERS() {
-    return {
-      "Accept": "application/json",
-      "Content-Type": "application/json"
-    };
-  }
-
-  /**
-   * Default options.
-   *
-   * @type {Object}
-   */
-  static get defaultOptions() {
-    return { timeout: 5000, requestMode: "cors" };
-  }
-
-  /**
-   * Constructor.
-   *
-   * Options:
-   * - {Number} timeout      The request timeout in ms (default: `5000`).
-   * - {String} requestMode  The HTTP request mode (default: `"cors"`).
-   *
-   * @param {EventEmitter} events  The event handler.
-   * @param {Object}       options The options object.
-   */
-  constructor(events, options = {}) {
-    // public properties
-    /**
-     * The event emitter instance.
-     * @type {EventEmitter}
-     */
-    if (!events) {
-      throw new Error("No events handler provided");
-    }
-    this.events = events;
-
-    options = Object.assign({}, HTTP.defaultOptions, options);
-
-    /**
-     * The request mode.
-     * @see  https://fetch.spec.whatwg.org/#requestmode
-     * @type {String}
-     */
-    this.requestMode = options.requestMode;
-
-    /**
-     * The request timeout.
-     * @type {Number}
-     */
-    this.timeout = options.timeout;
-  }
-
-  /**
-   * Performs an HTTP request to the Kinto server.
-   *
-   * Options:
-   * - `{Object} headers` The request headers object (default: {})
-   *
-   * Resolves with an objet containing the following HTTP response properties:
-   * - `{Number}  status`  The HTTP status code.
-   * - `{Object}  json`    The JSON response body.
-   * - `{Headers} headers` The response headers object; see the ES6 fetch() spec.
-   *
-   * @param  {String} url     The URL.
-   * @param  {Object} options The fetch() options object.
-   * @return {Promise}
-   */
-  request(url, options = { headers: {} }) {
-    let response, status, statusText, headers, _timeoutId, hasTimedout;
-    // Ensure default request headers are always set
-    options.headers = Object.assign({}, HTTP.DEFAULT_REQUEST_HEADERS, options.headers);
-    options.mode = this.requestMode;
-    return new Promise((resolve, reject) => {
-      _timeoutId = setTimeout(() => {
-        hasTimedout = true;
-        reject(new Error("Request timeout."));
-      }, this.timeout);
-      fetch(url, options).then(res => {
-        if (!hasTimedout) {
-          clearTimeout(_timeoutId);
-          resolve(res);
-        }
-      }).catch(err => {
-        if (!hasTimedout) {
-          clearTimeout(_timeoutId);
-          reject(err);
-        }
-      });
-    }).then(res => {
-      response = res;
-      headers = res.headers;
-      status = res.status;
-      statusText = res.statusText;
-      this._checkForDeprecationHeader(headers);
-      this._checkForBackoffHeader(status, headers);
-      return res.text();
-    })
-    // Check if we have a body; if so parse it as JSON.
-    .then(text => {
-      if (text.length === 0) {
-        return null;
-      }
-      // Note: we can't consume the response body twice.
-      return JSON.parse(text);
-    }).catch(err => {
-      const error = new Error(`HTTP ${ status || 0 }; ${ err }`);
-      error.response = response;
-      error.stack = err.stack;
-      throw error;
-    }).then(json => {
-      if (json && status >= 400) {
-        let message = `HTTP ${ status }; `;
-        if (json.errno && json.errno in _errors2.default) {
-          message += _errors2.default[json.errno];
-          if (json.message) {
-            message += `: ${ json.message }`;
-          }
-        } else {
-          message += statusText || "";
-        }
-        const error = new Error(message.trim());
-        error.response = response;
-        error.data = json;
-        throw error;
-      }
-      return { status, json, headers };
-    });
-  }
-
-  _checkForDeprecationHeader(headers) {
-    const alertHeader = headers.get("Alert");
-    if (!alertHeader) {
-      return;
-    }
-    let alert;
-    try {
-      alert = JSON.parse(alertHeader);
-    } catch (err) {
-      console.warn("Unable to parse Alert header message", alertHeader);
-      return;
-    }
-    console.warn(alert.message, alert.url);
-    this.events.emit("deprecated", alert);
-  }
-
-  _checkForBackoffHeader(status, headers) {
-    let backoffMs;
-    const backoffSeconds = parseInt(headers.get("Backoff"), 10);
-    if (backoffSeconds > 0) {
-      backoffMs = new Date().getTime() + backoffSeconds * 1000;
-    } else {
-      backoffMs = 0;
-    }
-    this.events.emit("backoff", backoffMs);
-  }
-}
-exports.default = HTTP;
-
-},{"./errors.js":14}],16:[function(require,module,exports){
+},{"./adapters/base":25,"./utils":27,"uuid":23}],27:[function(require,module,exports){
 "use strict";
 
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
 exports.deepEquals = deepEquals;
-exports.quote = quote;
-exports.unquote = unquote;
 exports.sortObjects = sortObjects;
 exports.filterObjects = filterObjects;
 exports.reduceRecords = reduceRecords;
-exports.partition = partition;
 exports.isUUID = isUUID;
 exports.waterfall = waterfall;
 exports.pFinally = pFinally;
@@ -3503,26 +5656,6 @@ function deepEquals(a, b) {
     return false;
   }
   return true;
-}
-
-/**
- * Returns the specified string with double quotes.
- *
- * @param  {String} str  A string to quote.
- * @return {String}
- */
-function quote(str) {
-  return `"${ str }"`;
-}
-
-/**
- * Trim double quotes from specified string.
- *
- * @param  {String} str  A string to unquote.
- * @return {String}
- */
-function unquote(str) {
-  return str.replace(/^"/, "").replace(/"$/, "");
 }
 
 /**
@@ -3563,13 +5696,17 @@ function sortObjects(order, list) {
  * Filters records in a list matching all given filters.
  *
  * @param  {String} filters  The filters object.
- * @param  {Array}  list     The collection to order.
+ * @param  {Array}  list     The collection to filter.
  * @return {Array}
  */
 function filterObjects(filters, list) {
   return list.filter(entry => {
     return Object.keys(filters).every(filter => {
-      return entry[filter] === filters[filter];
+      const value = filters[filter];
+      if (Array.isArray(value)) {
+        return value.some(candidate => candidate === entry[filter]);
+      }
+      return entry[filter] === value;
     });
   });
 }
@@ -3585,27 +5722,6 @@ function filterObjects(filters, list) {
 function reduceRecords(filters, order, list) {
   const filtered = filters ? filterObjects(filters, list) : list;
   return order ? sortObjects(order, filtered) : filtered;
-}
-
-/**
- * Chunks an array into n pieces.
- *
- * @param  {Array}  array
- * @param  {Number} n
- * @return {Array}
- */
-function partition(array, n) {
-  if (n <= 0) {
-    return array;
-  }
-  return array.reduce((acc, x, i) => {
-    if (i === 0 || i % n === 0) {
-      acc.push([x]);
-    } else {
-      acc[acc.length - 1].push(x);
-    }
-    return acc;
-  }, []);
 }
 
 /**
@@ -3649,5 +5765,5 @@ function pFinally(promise, fn) {
   }));
 }
 
-},{"assert":3}]},{},[2])(2)
+},{"assert":4}]},{},[2])(2)
 });
