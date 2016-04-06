@@ -32,7 +32,7 @@ add_task(function* test_check_maybeSync(){
         response.setHeader(headerElements[0], headerElements[1].trimLeft());
       }
 
-      // set the
+      // set the server date
       response.setHeader("Date", (new Date(2000)).toUTCString());
 
       response.write(sampled.responseBody);
@@ -48,8 +48,8 @@ add_task(function* test_check_maybeSync(){
     `http://localhost:${server.identity.primaryPort}/v1`);
 
   // set some initial values so we can check these are updated appropriately
-  Services.prefs.setIntPref("services.kinto.last_update", 0);
-  Services.prefs.setIntPref("services.kinto.clock_difference", 0);
+  Services.prefs.setIntPref(PREF_LAST_UPDATE, 0);
+  Services.prefs.setIntPref(PREF_CLOCK_SKEW_SECONDS, 0);
   Services.prefs.clearUserPref(PREF_LAST_ETAG);
 
 
@@ -82,15 +82,45 @@ add_task(function* test_check_maybeSync(){
   // we previously set the serverTime to 2 (seconds past epoch)
   do_check_eq(clockDifference <= endTime / 1000
               && clockDifference >= Math.floor(startTime / 1000) - 2, true);
-
   // Last timestamp was saved. An ETag header value is a quoted string.
   let lastEtag = Services.prefs.getCharPref(PREF_LAST_ETAG);
   do_check_eq(lastEtag, "\"1100\"");
+
+
+  // Simulate a poll with up-to-date collection.
+  Services.prefs.setIntPref(PREF_LAST_UPDATE, 0);
   // If server has no change, a 304 is received, maybeSync() is not called.
   updater.addTestKintoClient("test-collection", {
     maybeSync: () => {throw new Error("Should not be called");}
   });
   yield updater.checkVersions();
+  // Last update is overwritten
+  do_check_eq(Services.prefs.getIntPref(PREF_LAST_UPDATE), 2);
+
+
+  // Simulate a server error.
+  function simulateErrorResponse (request, response) {
+    response.setHeader("Date", (new Date(3000)).toUTCString());
+    response.setHeader("Content-Type", "application/json; charset=UTF-8");
+    response.write(JSON.stringify({
+      code: 503,
+      errno: 999,
+      error: "Service Unavailable",
+    }));
+    response.setStatusLine(null, 503, "Service Unavailable");
+  }
+  server.registerPathHandler(changesPath, simulateErrorResponse);
+  // checkVersions() fails with adequate error.
+  let error;
+  try {
+    yield updater.checkVersions();
+  }
+  catch (e) {
+    error = e;
+  }
+  do_check_eq(error.message, "Polling for changes failed.");
+  // When an error occurs, last update was not overwritten (see Date header above).
+  do_check_eq(Services.prefs.getIntPref(PREF_LAST_UPDATE), 2);
 });
 
 function run_test() {

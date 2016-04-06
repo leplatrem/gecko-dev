@@ -50,18 +50,26 @@ this.checkVersions = function() {
 
     let response = yield fetch(changesEndpoint, {headers});
 
+    let versionInfo;
+    // No changes since last time. Go on with empty list of changes.
+    if (response.status == 304) {
+      versionInfo = {data: []};
+    }
+    else {
+      versionInfo = yield response.json();
+    }
+
+    // If the server is failing, the JSON response might not contain the
+    // expected data (e.g. error response - Bug 1259145)
+    if (!versionInfo.hasOwnProperty("data")) {
+      throw new Error("Polling for changes failed.");
+    }
+
     // Record new update time and the difference between local and server time
     let serverTimeMillis = Date.parse(response.headers.get("Date"));
     let clockDifference = Math.abs(Date.now() - serverTimeMillis) / 1000;
-    Services.prefs.setIntPref(PREF_KINTO_LAST_UPDATE, serverTimeMillis / 1000);
     Services.prefs.setIntPref(PREF_KINTO_CLOCK_SKEW_SECONDS, clockDifference);
-
-    // No changes since last time.
-    if (response.status == 304) {
-      return;
-    }
-
-    let versionInfo = yield response.json();
+    Services.prefs.setIntPref(PREF_KINTO_LAST_UPDATE, serverTimeMillis / 1000);
 
     let firstError;
     for (let collectionInfo of versionInfo.data) {
@@ -75,7 +83,7 @@ this.checkVersions = function() {
       if (kintoClient && kintoClient.maybeSync) {
         let lastModified = 0;
         if (collectionInfo.last_modified) {
-          lastModified = collectionInfo.last_modified
+          lastModified = collectionInfo.last_modified;
         }
         try {
           yield kintoClient.maybeSync(lastModified, serverTimeMillis);
